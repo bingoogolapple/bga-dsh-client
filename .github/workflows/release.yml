@@ -1,0 +1,199 @@
+name: Release
+
+# 推送形如 v1.0.0 的 tag 时触发：在 macOS runner 上执行 pnpm tauri build，按矩阵
+# 分别构建 Apple Silicon（aarch64）与 Intel（x86_64）两个架构的 .app 与 dmg，
+# 然后自动创建对应的 GitHub Release 并上传全部产物作为下载附件。
+#
+# 注意：产物文件名里的版本号来自 src-tauri/tauri.conf.json（与 Cargo.toml 同步），
+# 打 tag 前请先把两处的 version 与 tag 保持一致（如 v0.1.0 ↔ 0.1.0）。
+on:
+  push:
+    tags:
+      - 'v*'
+
+# 同 tag 重复推送时不并发发布，避免 Release 冲突；不取消已在进行中的构建。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# 允许工作流创建 Release、上传附件。
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    # 平台矩阵：macos-14 为 Apple Silicon（arm64），macos-15-intel 为 Intel（x86_64），
+    # ubuntu-24.04 为 Linux（x64，官方路径构建 + deb 产物），windows-latest 为 Win x64
+    # （官方路径构建 + NSIS 产物）。
+    # macOS 13（旧 Intel runner）已公告下线，故 Intel 用 macos-15-intel。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            arch: aarch64
+          - platform: macos-15-intel
+            arch: x86_64
+          - platform: ubuntu-24.04
+            arch: x86_64
+          - platform: windows-latest
+            arch: x86_64
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v5
+
+      # Linux 打包的系统依赖（Tauri v2）：webkit2gtk-4.1 + GTK3 等，仅 ubuntu 需要
+      # （Windows runner 预装 WebView2 与 MSVC 工具链，无需额外安装）
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev
+
+      # 内置运行时版本：唯一定义在 scripts/bundle-runtime.mjs 的常量行
+      # （NODE_VER / DSH_VERSION / PNPM_VERSION，不再有 env 覆盖）。
+      # CI 不硬编码版本，从这里读取（本地 build-release.sh 的 default_ver 同理）；
+      # 升版本请用 ./scripts/set-runtime-version.sh（只改 bundle-runtime.mjs + RUNTIME-VERSIONING.md）。
+      # shell: bash —— Windows runner 默认 pwsh，而本步骤用 bash 语法（$()、$GITHUB_OUTPUT）。
+      - name: 读取内置运行时版本
+        id: ver
+        shell: bash
+        run: |
+          echo "NODE_VER=$(sed -nE "s/.*const NODE_VER = '([^']+)'.*/\1/p" scripts/bundle-runtime.mjs | head -1)" >> "$GITHUB_OUTPUT"
+          echo "DSH_VERSION=$(sed -nE "s/.*const DSH_VERSION = '([^']+)'.*/\1/p" scripts/bundle-runtime.mjs | head -1)" >> "$GITHUB_OUTPUT"
+          echo "PNPM_VERSION=$(sed -nE "s/.*const PNPM_VERSION = '([^']+)'.*/\1/p" scripts/bundle-runtime.mjs | head -1)" >> "$GITHUB_OUTPUT"
+          echo "读取到: node=$NODE_VER dsh=$DSH_VERSION pnpm=$PNPM_VERSION"
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Cargo 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 内置 Node.js 运行时缓存：key 由版本常量 + 架构 + 生成脚本内容决定，
+      # 命中直接用；未命中则本次生成后存入。注意不设 restore-keys 兜底，
+      # 避免恢复出旧版本 runtime——版本漂移时 build-release.sh 会比较 manifest 重建。
+      # key 必须含 matrix.platform：darwin-x64 与 linux-x64 的 arch 都是 x86_64，
+      # 不带平台会互相抢同一个缓存键（每次各白重建一轮）+ 依赖时序互相覆盖。
+      - name: 缓存内置 Node.js 运行时
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/resources/runtime
+          key: dsh-runtime-${{ matrix.platform }}-${{ matrix.arch }}-${{ steps.ver.outputs.NODE_VER }}-${{ steps.ver.outputs.DSH_VERSION }}-${{ steps.ver.outputs.PNPM_VERSION }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
+
+      # shell: bash —— Windows runner 默认 pwsh，本步骤用 bash 语法（${var#v}、$(...)）
+      - name: 校验 tag 与版本号一致
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CONF_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' src-tauri/tauri.conf.json | head -1)"
+          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
+            echo "错误: tag $GITHUB_REF_NAME 与 tauri.conf.json 版本 $CONF_VERSION 不一致（发版前请运行 ./scripts/set-app-version.sh）" >&2
+            exit 1
+          fi
+          echo "版本一致: $TAG_VERSION"
+
+      - name: 运行 Rust 单元测试
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: 依赖安全审计（cargo audit）
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 代码风格与静态检查
+        working-directory: src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      # shell: bash —— Windows runner 默认 pwsh，本步骤是 bash for 循环
+      - name: 前端脚本语法检查
+        shell: bash
+        run: |
+          for f in ui/assets/*.js; do node --check "$f"; done
+
+      # ui/ 是纯静态前端（frontendDist: ../ui），无需单独构建；
+      # tauri build 按 runner 宿主架构自动产出对应架构产物。
+      # 双版本：plain（现状，无内置运行时）+ bundled（内置 Node.js，离线可用）。
+      # two 模式每轮构建后立即归档到 dist/release/{plain,bundled}，避免共用一个
+      # target/release/bundle 输出目录而互相覆盖；bundled 首跑会自动下载 Node 并
+      # npm ci 安装 dsh（scripts/bundle-runtime.mjs），产物命名加 -bundled 后缀区分。
+      # shell: bash —— build-release.sh 是 bash 脚本（Windows 走 Git Bash）。
+      - name: 构建双版本（plain + bundled）
+        shell: bash
+        run: ./scripts/build-release.sh two
+
+      # ditto 打包 .app 以保留符号链接与执行权限，行为与 zip -r 不同、更稳妥；
+      # zip 文件名带架构后缀，避免多个矩阵产物重名。仅 macOS 产物有 .app（Linux 走 deb）。
+      - name: 打包 .app 为 zip（仅 macOS）
+        if: runner.os == 'macOS'
+        run: |
+          cd dist/release/plain
+          ditto -c -k --keepParent "DeepSeekHarness.app" "$GITHUB_WORKSPACE/DeepSeek-Harness-${{ matrix.arch }}-${{ github.ref_name }}.zip"
+          cd "$GITHUB_WORKSPACE/dist/release/bundled"
+          ditto -c -k --keepParent "DeepSeekHarness.app" "$GITHUB_WORKSPACE/DeepSeek-Harness-bundled-${{ matrix.arch }}-${{ github.ref_name }}.zip"
+
+      - name: 创建 Release 并上传 dmg / deb / exe / zip
+        uses: softprops/action-gh-release@v3
+        with:
+          # 从触发的 tag 自动生成 Release；按平台产出上传：
+          # macOS → dmg + .app zip；Linux → deb；Windows → NSIS exe。glob 在无匹配平台自然跳过。
+          files: |
+            dist/release/plain/*.dmg
+            dist/release/bundled/*.dmg
+            dist/release/plain/*.deb
+            dist/release/bundled/*.deb
+            dist/release/plain/*.exe
+            dist/release/bundled/*.exe
+            DeepSeek-Harness-${{ matrix.arch }}-${{ github.ref_name }}.zip
+            DeepSeek-Harness-bundled-${{ matrix.arch }}-${{ github.ref_name }}.zip
+          generate_release_notes: true
+          # 在 Release 正文中写入安装与使用说明，
+          # generate_release_notes 生成的提交记录会自动追加到 body 之后。
+          body: |
+            ## 安装 / Installation
+
+            **中文：**
+            1. 在下方 Assets 中按自己的 Mac 架构下载对应的 `*.dmg`（或 zip 版 `.app`）：`*_aarch64.dmg` 用于 M 系列（Apple Silicon）Mac，`*_x86_64.dmg` 用于 Intel Mac。打开 dmg 后把 `DeepSeekHarness.app` 拖入「应用程序」目录。
+            2. 首次打开若提示「无法打开，因为无法验证开发者」，这是 macOS Gatekeeper 对未做开发者签名应用的保护，处理方式二选一：右键 app → 打开；或「系统设置 → 隐私与安全性 → 仍要打开」。放行一次后即可正常使用（本应用未做开发者签名，属正常现象）。
+            3. 若提示「已损坏，无法打开」（macOS 对未签名应用的常见误报，文件通常没坏）：先确认下载的架构与你的 Mac 匹配（Intel Mac 装 aarch64 版会报错）；仍不行则在「终端」执行 `xattr -dr com.apple.quarantine /Applications/DeepSeekHarness.app` 后重新打开。
+
+            **English:**
+            1. Download the `*.dmg` (or the zip'd `.app`) matching your Mac's architecture from the Assets below: `*_aarch64.dmg` for Apple Silicon (M-series) Macs, `*_x86_64.dmg` for Intel Macs. Open the dmg and drag `DeepSeekHarness.app` into the **Applications** folder.
+            2. If macOS says "cannot be opened because the developer cannot be verified" the first time, that's Gatekeeper protecting the unsigned app: right-click the app → Open, or go to **System Settings → Privacy & Security → Open Anyway**. After allowing it once, it works normally (this app is not developer-signed, which is normal).
+            3. If macOS says the app is "damaged and can't be opened" (a common false positive for unsigned apps; the file is usually fine): make sure you downloaded the build matching your Mac's architecture (an Intel Mac installing the `aarch64` build will error); if it still fails, run `xattr -dr com.apple.quarantine /Applications/DeepSeekHarness.app` in Terminal and open it again.
+
+            **Linux (中文):** 下载 `*.deb`（内置版为 `*-bundled_*.deb`）后 `sudo dpkg -i <文件>.deb`（缺依赖时先 `sudo apt -f install`）。应用不提供 AppImage。
+
+            **Linux (English):** Download the `*.deb` (`*-bundled_*.deb` for the embedded-runtime build) and run `sudo dpkg -i <file>.deb` (run `sudo apt -f install` first if dependencies are missing). No AppImage is provided.
+
+            **Windows (中文):** 下载 `*-setup.exe`（内置版为 `*-bundled-setup.exe`）安装即可。若提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」（未做代码签名，属正常现象）。
+
+            **Windows (English):** Download and run `*-setup.exe` (`*-bundled-setup.exe` for the embedded-runtime build). If SmartScreen shows "Windows protected your PC", click **More info → Run anyway** (the app is not code-signed, which is normal).
+
+            ## 使用 / Usage
+
+            **中文：** 启动后自动探测并拉起 DSH Web 服务（默认 `127.0.0.1:3080`），常驻系统托盘；设置页可配置服务拉起方式、退出时是否停止服务，以及开启局域网扫码配对访问（默认 `0.0.0.0:18080`）。
+
+            **English:** On launch the app auto-detects and starts the DSH Web service (default `127.0.0.1:3080`) and lives in the system tray; the settings page lets you choose how the service is launched, whether to stop it on quit, and enables LAN QR-code pairing access (default `0.0.0.0:18080`).

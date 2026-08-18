@@ -1,0 +1,4 @@
+# 本地与 CI 统一使用的 Rust 工具链（dtolnay/rust-toolchain 自动读取本文件）。
+# 与开发机当前版本对齐；升级时先在此处确认再全局生效。
+[toolchain]
+channel = "1.97"

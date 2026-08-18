@@ -1,0 +1,45 @@
+[package]
+name = "bga-dsh-client"
+version = "0.0.2"
+description = "DSH Web GUI 的 Tauri 桌面壳"
+license = "MIT"
+edition = "2021"
+
+# 二进制名 = 产品名（无空格驼峰，Cargo 目标名不允许空格）：
+# - dev 进程在 macOS Dock/菜单栏显示 DeepSeekHarness（不再显示旧 crate 名）；
+# - build 产物内的可执行文件名同步为 mainBinaryName（DeepSeekHarness），
+#   而 Dock 下 .app 的正式名称仍由 productName "DeepSeekHarness" 提供。
+[[bin]]
+name = "DeepSeekHarness"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+qrcode = "0.14"
+arboard = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "rt", "macros"] }
+http-body-util = "0.1"
+bytes = "1"
+sentry = "0.34"
+# 配对会话令牌的加密随机源（已在依赖树中，直接复用同一版本，不引入新 crate）。
+getrandom = "0.2"
+# 更新检测：GitHub Releases API 请求（rustls 证书校验，不依赖系统 TLS）与版本号比较。
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+semver = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

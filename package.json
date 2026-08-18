@@ -1,0 +1,19 @@
+{
+  "name": "bga-dsh-client",
+"version": "0.0.2",
+  "private": true,
+  "description": "DSH Web GUI 的 Tauri 桌面壳：自动探测/拉起服务、托盘常驻、设置页配置拉起方式",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icon": "tauri icon",
+    "bundled": "./scripts/build-release.sh bundled",
+    "two": "./scripts/build-release.sh two"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  },
+  "license": "MIT",
+  "author": "bingoogolapple"
+}

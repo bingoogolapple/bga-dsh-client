@@ -1,0 +1,18 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+.DS_Store
+*.log
+# 沙箱环境下的本地 cargo 缓存（不入库）
+.cargo-home/
+
+# 编辑器/IDE 目录
+.vscode/
+.idea/
+
+# 内置 Node.js 运行时（打包产物，不入库）：nd=Node 二进制、rt/node_modules=安装产物；
+# rt/package.json + package-lock.json 提交（npm ci 可复现安装）
+src-tauri/resources/runtime/nd/
+src-tauri/resources/runtime/rt/node_modules/
+src-tauri/resources/runtime/rt/*.zip
+dist/

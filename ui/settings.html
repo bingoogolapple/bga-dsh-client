@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>客户端设置 - DeepSeekHarness</title>
+  <link rel="stylesheet" href="./assets/app.css" />
+</head>
+<body class="settings-body" data-doc-title="win.settings_title">
+  <div id="app-shell">
+  <header id="topbar" data-tauri-drag-region="deep">
+    <div class="window-controls">
+      <button id="btn-win-close" class="win-btn win-close" data-i18n-aria="win.close" data-i18n-tooltip="win.close.tooltip">
+        <svg class="icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M3.4 3.4 L8.6 8.6 M8.6 3.4 L3.4 8.6" />
+        </svg>
+      </button>
+      <button id="btn-win-min" class="win-btn win-min" data-i18n-aria="win.min" data-i18n-tooltip="win.min">
+        <svg class="icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
+          <path d="M2 6 H10" />
+        </svg>
+      </button>
+      <button id="btn-win-full" class="win-btn win-full" data-i18n-aria="win.full" data-i18n-tooltip="win.full.tooltip">
+        <svg class="icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6.2 5.8 L2.8 3.2 M4.2 3.2 H2.8 V4.6 M5.8 6.2 L9.2 8.8 M7.8 8.8 H9.2 V7.4" />
+        </svg>
+      </button>
+    </div>
+    <div class="brand">
+      <svg class="brand-whale" viewBox="0 0 50 50" aria-hidden="true">
+        <path fill="#ffffff" d="M48.8354 10.0479C48.3232 9.79199 48.1025 10.2798 47.8032 10.5278C47.7007 10.6079 47.6143 10.7119 47.5273 10.8076C46.7793 11.624 45.9048 12.1597 44.7622 12.0957C43.0923 12 41.666 12.5356 40.4058 13.8398C40.1377 12.2319 39.2476 11.272 37.8926 10.6558C37.1836 10.3359 36.4668 10.0156 35.9702 9.31982C35.6235 8.82373 35.5293 8.27197 35.356 7.72754C35.2456 7.3999 35.1353 7.06396 34.7651 7.00781C34.3633 6.94385 34.2056 7.2876 34.0479 7.57568C33.418 8.75195 33.1733 10.0479 33.1973 11.3599C33.2524 14.312 34.4736 16.6641 36.8999 18.3359C37.1758 18.5278 37.2466 18.7197 37.1597 19C36.9946 19.5757 36.7974 20.1357 36.624 20.7119C36.5137 21.0801 36.3486 21.1597 35.9624 21C34.6309 20.4321 33.481 19.5918 32.4644 18.5757C30.7393 16.8721 29.1792 14.9917 27.2334 13.52C26.7764 13.1758 26.3193 12.856 25.8467 12.5518C23.8618 10.584 26.1069 8.96777 26.627 8.77588C27.1704 8.57568 26.8159 7.8877 25.0591 7.896C23.3022 7.90381 21.6953 8.50391 19.647 9.30371C19.3477 9.42383 19.0322 9.51172 18.7095 9.58398C16.8501 9.22363 14.9199 9.14355 12.9033 9.37598C9.10596 9.80762 6.07275 11.6396 3.84326 14.7681C1.16455 18.5278 0.53418 22.7998 1.30664 27.2559C2.11768 31.9521 4.46582 35.8398 8.07373 38.8799C11.8159 42.0322 16.1255 43.5762 21.041 43.2803C24.0269 43.104 27.3516 42.6963 31.1016 39.4561C32.0469 39.936 33.0396 40.1279 34.686 40.272C35.9546 40.3921 37.1758 40.208 38.1211 40.0078C39.6021 39.688 39.4995 38.2881 38.9639 38.0322C34.623 35.9678 35.5762 36.8081 34.71 36.1279C36.9155 33.4639 40.2402 30.6958 41.54 21.728C41.6426 21.0161 41.5557 20.5679 41.54 19.9917C41.5322 19.6396 41.6108 19.5039 42.0049 19.4639C43.0923 19.3359 44.1479 19.0317 45.1167 18.4878C47.9292 16.9199 49.064 14.3438 49.3315 11.2559C49.3711 10.7837 49.3237 10.2959 48.8354 10.0479ZM24.3262 37.8398C20.1196 34.4639 18.0791 33.3521 17.2358 33.3999C16.4482 33.4482 16.5898 34.3682 16.7632 34.9678C16.9443 35.5601 17.1812 35.9683 17.5117 36.4878C17.7402 36.832 17.8979 37.3442 17.2832 37.728C15.9282 38.584 13. 3426 38.4961 12.6353 39.3203C12.1875 39.856 11.9902 40.56 12.2529 41.3521C12.5068 42.1284 12.9946 42.56 13.7104 42.7358C14.3896 42.9038 15.3672 42.7676 16.5498 42.3359C17.7568 41.8955 18.6772 41.1118 19.207 39.8481C20.1865 40.0474 21.3496 40.1675 22.9023 40.1436C23.6504 40.1357 24.2744 40.12 25.0146 40.0796C25.9873 40.024 26.7764 39.9277 27.6475 39.4961C29.0244 38.8325 29.9258 37.7603 30.3438 36.1763C30.7021 35.6484 31.4102 35.2798 32.1758 35.0562C36.7393 33.8398 39.876 31.0723 42.1289 27.2715C43.0283 25.856 43.0908 24.4883 42.3691 22.9204C42.2656 22.6885 42.5811 22.4409 42.7969 22.5762C43.3945 22.9204 44.7715 23.5522 46.0967 23.5684C47.5049 23.5762 48.856 23.0396 49.8086 21.84C50.2471 21.2964 50.4775 20.5757 50.4854 19.8398C50.4932 19.2964 50.4424 18.7524 50.3408 18.2085C50.2314 17.6318 50.3613 17.0723 50.7246 16.6235C51.1514 16.1357 51.1631 15.584 50.7881 15.1841C50.3965 14.7764 49.8145 14.7998 49.2979 14.9917L49.1748 15.0479C49.2139 14.5122 49.2285 13.9844 49.2129 13.4727C49.1963 12.5527 49.064 11.64 48.8354 10.0479ZM37.9561 17.1123C38.1387 17.1602 37.9727 17.6875 37.835 18.1602C37.6328 18.8721 37.2598 20.0078 36.7354 21.5757C36.624 21.8999 36.4834 22.2559 36.3584 22.5923C36.4385 22.2397 36.5352 21.8877 36.6162 21.5278C36.9277 20.1367 37.0811 19.1367 37.166 18.4243C37.2188 18.0244 37.2852 17.6 37.7905 17.6001C37.8486 17.6 37.9014 17.6396 37.9561 17.1123ZM29.7852 26.5757C27.9736 26.5757 27.0522 28.2163 27.0522 29.4C27.0522 30.6323 28.0117 31.8242 29.7852 31.8242C31.4609 31.8242 32.6338 30.6563 32.6338 29.4082C32.6426 28.1558 31.5254 26.5757 29.7852 26.5757Z" />
+      </svg>
+    </div>
+    <span class="topbar-title" data-i18n="top.settings">客户端设置</span>
+    <div class="actions">
+      <button id="btn-main" data-i18n-tooltip="top.show_main">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2.2 8.4 C3.9 4.8 6.2 3.6 8 3.6 C9.8 3.6 12.1 4.8 13.8 8.4 C12.1 12 9.8 13.2 8 13.2 C6.2 13.2 3.9 12 2.2 8.4 Z" />
+          <circle cx="8" cy="8.4" r="2" />
+        </svg>
+        <span data-i18n="top.show_main">显示主界面</span>
+      </button>
+    </div>
+    </header>
+
+  <div class="settings-layout">
+    <aside class="settings-side">
+      <nav class="settings-nav">
+        <button class="nav-item active" data-panel="service">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="3.4" cy="8" r="1.1" />
+            <circle cx="12.6" cy="8" r="1.1" />
+            <path d="M4.5 8 H11.5 M9.6 8 C8.8 6.6 7.2 6.6 6.4 8 C7.2 9.4 8.8 9.4 9.6 8" />
+          </svg>
+          <span data-i18n="nav.service">dsh 服务控制</span>
+        </button>
+        <button class="nav-item" data-panel="lan">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="3.2" cy="3.2" r="1.2" />
+            <circle cx="12.8" cy="3.2" r="1.2" />
+            <circle cx="3.2" cy="12.8" r="1.2" />
+            <circle cx="12.8" cy="12.8" r="1.2" />
+            <path d="M4.4 3.2 H11.6 M3.2 4.4 V11.6 M12.8 4.4 V11.6 M4.4 12.8 H11.6" />
+          </svg>
+          <span data-i18n="nav.lan">局域网代理服务控制</span>
+        </button>
+        <button class="nav-item" data-panel="donate">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 13.4 C3.8 10.2 2.4 7.5 2.4 5.4 C2.4 3.7 3.8 2.6 5.3 2.6 C6.4 2.6 7.4 3.2 8 4.1 C8.6 3.2 9.6 2.6 10.7 2.6 C12.2 2.6 13.6 3.7 13.6 5.4 C13.6 7.5 12.2 10.2 8 13.4 Z" />
+          </svg>
+          <span data-i18n="nav.donate">打赏支持作者</span>
+        </button>
+      </nav>
+      <div class="side-version">
+        <span class="side-src" id="v-src"></span>
+        <button id="btn-check-update" class="ghost update-check-btn" data-i18n="side.check_update">检查更新</button>
+        <div id="update-status" class="update-status" hidden></div>
+        <div class="side-tools" id="tool-versions">
+          <span class="side-tool"><span class="side-tool-k" data-i18n="side.client">客户端</span><span class="side-tool-v" id="app-version">-</span></span>
+          <span class="side-tool"><span class="side-tool-k">node</span><span class="side-tool-v" id="v-node">–</span></span>
+          <span class="side-tool"><span class="side-tool-k">pnpm</span><span class="side-tool-v" id="v-pnpm">–</span></span>
+          <span class="side-tool"><span class="side-tool-k">dsh</span><span class="side-tool-v" id="v-dsh">–</span></span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="settings-main">
+      <section class="panel active" id="panel-service">
+        <div class="panel-title-row">
+          <h1 class="panel-title" data-i18n="svc.title">dsh 服务控制</h1>
+          <span id="s-pill" class="pill" data-state="none" data-i18n="svc.unknown">未知</span>
+        </div>
+        <p class="hint" data-i18n="svc.hint">关闭窗口不会停止服务；本应用启动的服务可由托盘或此处管理。若 3080 上运行的是外部启动的服务，启动/停止/重启均不可用。</p>
+        <div class="service-actions-row">
+          <button id="s-start" class="action-btn action-accent">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M5.5 3.6v8.8l7.4-4.4z" />
+            </svg>
+            <span data-i18n="svc.start">启动 dsh 服务</span>
+          </button>
+          <button id="s-restart" class="action-btn" data-i18n-tooltip="svc.restart" title="重启服务">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M13.5 8 a5.5 5.5 0 1 1-1.9-4.2" />
+              <path d="M13.5 2.5 V5 H11" />
+            </svg>
+            <span data-i18n="svc.restart">重启 dsh 服务</span>
+          </button>
+          <button id="s-stop" class="action-btn action-danger">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1.2" />
+            </svg>
+            <span data-i18n="svc.stop">停止 dsh 服务</span>
+          </button>
+        </div>
+
+        <div class="log-head">
+          <h3 data-i18n="svc.log">服务运行日志</h3>
+          <button id="s-log-refresh" class="ghost" data-i18n="svc.refresh">刷新</button>
+        </div>
+        <div class="log-view" id="s-log"><div class="log-empty" id="s-log-empty" data-i18n="svc.log.empty">暂无日志：服务尚未启动，或日志文件不存在。</div></div>
+
+        <section class="setting-group" id="method-section">
+          <div class="method-head">
+            <h2 data-i18n="gen.method">服务拉起方式</h2>
+            <p class="hint" data-i18n="gen.method.hint">选择应用启动（或托盘「启动服务 / 重启服务」）时如何拉起 DSH 服务。</p>
+          </div>
+          <p class="hint hidden" id="method-note-builtin" data-i18n="gen.method.builtin_note">内置版：DSH 服务由应用自带的 Node.js 与 dsh 拉起（离线可用），无需配置。</p>
+
+          <div class="method-grid">
+          <label class="option method-card">
+            <input type="radio" name="launch_method" value="npx" />
+            <div>
+              <div class="option-title" data-i18n="gen.method.npx">方式一（默认）· npx 拉起</div>
+              <div class="option-desc"><code>npx --yes @deepseek-ai/dsh web</code> — <span data-i18n="gen.method.npx.desc">无需全局安装，首次运行会自动下载。</span></div>
+            </div>
+          </label>
+
+          <label class="option method-card">
+            <input type="radio" name="launch_method" value="dsh" />
+            <div>
+              <div class="option-title" data-i18n="gen.method.dsh">方式二 · 全局命令拉起</div>
+              <div class="option-desc"><code>dsh web</code> — <span data-i18n="gen.method.dsh.desc">已全局安装过 <code>@deepseek-ai/dsh</code> 时使用。</span></div>
+            </div>
+          </label>
+
+          <label class="option method-card">
+            <input type="radio" name="launch_method" value="pnpm" />
+            <div>
+              <div class="option-title" data-i18n="gen.method.pnpm">方式三 · 指定目录 + pnpm 拉起</div>
+              <div class="option-desc"><code>pnpm dsh web</code> — <span data-i18n="gen.method.pnpm.desc">进入指定目录（DeepSeekHarness 源码目录）后执行。</span></div>
+            </div>
+          </label>
+          </div>
+
+          <div id="pnpm-row" class="pnpm-row hidden">
+            <input id="launch-dir-input" type="text" data-i18n-placeholder="gen.dir.placeholder" placeholder="选择 DeepSeekHarness 源码目录，例如 ~/dsh/deepseek-harness" />
+            <button id="btn-pick" class="ghost" data-i18n="gen.pick_dir">选择目录…</button>
+          </div>
+        </section>
+
+        <section class="setting-group">
+          <h2 data-i18n="gen.quit">退出行为</h2>
+          <label class="option">
+            <input id="stop-service-on-quit" type="checkbox" />
+            <div>
+              <div class="option-title" data-i18n="gen.quit.stop">退出应用时停止服务</div>
+              <div class="option-desc" data-i18n="gen.quit.stop.desc">点击系统托盘「退出应用」时，是否一并停止本应用启动的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。外部已有的服务不受此开关影响。</div>
+            </div>
+          </label>
+        </section>
+      </section>
+
+      <section class="panel" id="panel-lan">
+        <div class="panel-title-row">
+          <h1 class="panel-title" data-i18n="lan.title">局域网代理服务控制</h1>
+          <span id="pair-status" class="pill" data-state="none" data-i18n="lan.detect">检测中…</span>
+        </div>
+        <section class="setting-group">
+          <p class="hint" data-i18n="lan.hint">手机与电脑连接同一 Wi-Fi，扫码确认一次性配对码后，即可在手机浏览器打开 Harness 界面；本机 Loopback 访问不受影响。配对身份跟随浏览器（Cookie）而非 IP，因此也适用于 localhost.run 等内网穿透隧道——每台设备各自配对，互不影响。</p>
+          <div class="lan-controls">
+            <button id="btn-pair-start" class="action-btn action-accent" hidden>
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M5.5 3.6v8.8l7.4-4.4z" />
+              </svg>
+              <span data-i18n="lan.start">启动局域网代理服务</span>
+            </button>
+            <button id="btn-pair-restart" class="action-btn" data-i18n-tooltip="lan.restart.tooltip" title="重启局域网代理服务：保留配对码与已配对会话">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M13.5 8 a5.5 5.5 0 1 1-1.9-4.2" />
+                <path d="M13.5 2.5 V5 H11" />
+              </svg>
+              <span data-i18n="lan.restart">重启局域网代理服务</span>
+            </button>
+            <button id="btn-pair-stop" class="action-btn action-danger">
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1.2" />
+              </svg>
+              <span data-i18n="lan.stop">停止局域网代理服务</span>
+            </button>
+          </div>
+          <div class="lan-layout">
+            <div class="lan-qr-col">
+              <div id="pair-qr" class="pair-qr"></div>
+            </div>
+            <div class="lan-info-col">
+              <p class="hint" data-i18n="lan.hint2">配对成功后配对码立即作废，新设备请用窗口中的新码；已配对浏览器 30 分钟内免确认。</p>
+              <div class="lan-item lan-row">
+                <span class="lan-label" data-i18n="lan.code">一次性配对码</span>
+                <div id="pair-code" class="pair-code">------</div>
+              </div>
+              <div class="lan-item lan-row">
+                <span class="lan-label" data-i18n="lan.url">完整访问地址（含配对码）</span>
+                <div class="pair-url"><code id="pair-addr">-</code></div>
+              </div>
+            </div>
+          </div>
+          <div class="lan-actions">
+            <div class="row">
+              <button id="btn-pair-regen" class="action-btn action-accent">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M13.5 8 a5.5 5.5 0 1 1-1.9-4.2" />
+                  <path d="M13.5 2.5 V5 H11" />
+                </svg>
+                <span data-i18n="lan.regen">重新生成配对码</span>
+              </button>
+              <button id="btn-pair-copy-qr" class="action-btn">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2.5 2.5 H6 V6 H2.5 Z M10 2.5 H13.5 V6 H10 Z M2.5 10 H6 V13.5 H2.5 Z M10 10 H12 M10 13.5 V12 M13.5 10 V12 M12 12 V13.5" />
+                </svg>
+                <span data-i18n="lan.copy_qr">复制二维码图片</span>
+              </button>
+              <button id="btn-pair-copy-url" class="action-btn">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M6.5 9.5 L9.5 6.5 M5.3 7.3 L4 8.6 a2.8 2.8 0 0 0 4 4 l1.3-1.3 M10.7 8.7 L12 7.4 a2.8 2.8 0 0 0-4-4 L6.7 4.7" />
+                </svg>
+                <span data-i18n="lan.copy_url">复制访问链接</span>
+              </button>
+            </div>
+            <div class="devices-log-row">
+              <div class="lan-item devices-block">
+                <h3 class="devices-title" data-i18n="lan.devices">已配对设备</h3>
+                <ul id="pair-devices" class="pair-devices-list">
+                  <li class="empty" data-i18n="lan.devices.empty">暂无</li>
+                </ul>
+              </div>
+              <div class="log-col">
+                <div class="log-head">
+                  <h3 data-i18n="lan.log">代理服务日志</h3>
+                  <button id="p-log-refresh" class="ghost" data-i18n="svc.refresh">刷新</button>
+                </div>
+                <div class="log-view" id="p-log"><div class="log-empty" id="p-log-empty" data-i18n="lan.log.empty">暂无日志：代理服务尚未启动。</div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel" id="panel-donate">
+        <h1 class="panel-title" data-i18n="donate.title">打赏支持作者</h1>
+        <p class="hint" data-i18n="donate.hint">如果您觉得 DeepSeekHarness 帮助到了您，欢迎支持作者继续创作。<b>最推荐的方式</b>：通过作者的邀请链接订阅 OpenCode Go，<b>您与作者各得 $5 订阅额度</b>，双赢！</p>
+
+        <section class="donate-block donate-primary">
+          <div class="donate-block-head">
+            <svg class="donate-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 17 L6 9 M8 17 L10 9 M5 13 H9 M13 9 H19 M19 9 L17 17 M15 13 H19 M14 6 L15 6.5 M17 6 L18 5.5" />
+            </svg>
+            <div>
+              <div class="donate-block-title" data-i18n="donate.block.title">OpenCode Go · 云端 AI 编程订阅</div>
+              <div class="donate-block-desc" data-i18n="donate.block.desc">基于开源 <code>opencode.ai</code> 的 Coding Plan 订阅服务。通过作者的邀请链接订阅，<b>您和作者各得 $5 订阅额度</b>——您的订阅既是给自己添一份 AI 编程额度，也是对作者最实在的支持。</div>
+            </div>
+          </div>
+
+          <button id="btn-subscribe-opencode" class="action-btn action-accent donate-cta">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6.5 9.5 L9.5 6.5 M5.3 7.3 L4 8.6 a2.8 2.8 0 0 0 4 4 l1.3-1.3 M10.7 8.7 L12 7.4 a2.8 2.8 0 0 0-4-4 L6.7 4.7" />
+            </svg>
+            <span data-i18n="donate.cta">通过邀请链接订阅（双方各得 $5）</span>
+          </button>
+
+          <div class="donate-quota-title" data-i18n="donate.quota.title">订阅套餐额度</div>
+          <div class="donate-quotas">
+            <div class="quota-cell"><span class="quota-k" data-i18n="donate.quota.hours">5 小时限制</span><span class="quota-v" data-i18n="donate.quota.hours.v">$12 使用额度</span></div>
+            <div class="quota-cell"><span class="quota-k" data-i18n="donate.quota.week">每周限制</span><span class="quota-v" data-i18n="donate.quota.week.v">$30 使用额度</span></div>
+            <div class="quota-cell"><span class="quota-k" data-i18n="donate.quota.month">每月限制</span><span class="quota-v" data-i18n="donate.quota.month.v">$60 使用额度</span></div>
+          </div>
+          <p class="donate-quota-hint" data-i18n="donate.quota.hint">使用便宜点的模型，几乎不会有 Token 焦虑 ✨</p>
+          <p class="donate-note" data-i18n="donate.note">订阅成功后您立即获得对应额度，作者的额度也随之增加。感谢您的支持，让作者有动力持续维护这个开源项目！</p>
+        </section>
+      </section>
+    </main>
+  </div>
+  </div>
+
+  <script src="./assets/app.js"></script>
+  <script src="./assets/i18n.js"></script>
+  <script src="./assets/settings.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!-- 设置：三行滑杆 -->
+  <g fill="none" stroke="#000000" stroke-width="2.6" stroke-linecap="round">
+    <path d="M6 10.2 H30"/>
+    <path d="M6 18.2 H30"/>
+    <path d="M6 26.2 H30"/>
+  </g>
+  <g fill="#000000">
+    <circle cx="20.5" cy="10.2" r="4.1"/>
+    <circle cx="12.5" cy="18.2" r="4.1"/>
+    <circle cx="25.5" cy="26.2" r="4.1"/>
+  </g>
+</svg>

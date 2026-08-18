@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!-- 重启服务：顺时针循环箭头 -->
+  <circle cx="18" cy="18" r="10.8" fill="none" stroke="#000000" stroke-width="2.6"/>
+  <path d="M25.4 9.6 L27.9 15.8 L21.7 15.8 Z" fill="#000000" stroke-linejoin="round"/>
+</svg>

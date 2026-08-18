@@ -1,0 +1,1266 @@
+:root {
+  --brand: #4d6bfe;
+  --brand-dark: #3b55e8;
+  --ink: #1f2430;
+  --ink-2: #5b6472;
+  --ink-3: #8a93a3;
+  --line: #e6e9ef;
+  --bg: #f6f7fb;
+  --card: #ffffff;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --err: #dc2626;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background: transparent;
+}
+
+body {
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+button:hover {
+  background: #f0f2f8;
+}
+
+button.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: var(--brand-dark);
+}
+
+button.danger {
+  background: #fff;
+  border-color: #f3c1c1;
+  color: var(--err);
+}
+
+button.danger:hover {
+  background: #fef2f2;
+}
+
+button.ghost {
+  background: transparent;
+}
+
+/* 日志区刷新按钮：更小更紧凑；hover 放大、按下微缩 */
+.log-head .ghost {
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 6px;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.log-head .ghost:hover {
+  transform: scale(1.07);
+}
+
+.log-head .ghost:active {
+  transform: scale(0.96);
+}
+
+/* 禁用态（设置页/主界面的服务操作按钮随状态禁用） */
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+code {
+  background: #eef1fb;
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 12px;
+  color: #33427e;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ---------- topbar ---------- */
+
+#topbar {
+  position: relative;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: linear-gradient(90deg, #3b55e8, #4d6bfe);
+  color: #fff;
+  user-select: none;
+  cursor: default;
+}
+
+/* 主窗口运行状态：绝对定位钉在顶栏水平正中 */
+#status-pill {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* 设置窗口标题：同样水平居中（左红黄绿灯、右无内容也居中），普通箭头光标 */
+#topbar .topbar-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: default;
+}
+
+#topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-whale {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+#topbar .actions {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+}
+
+/* 顶栏右上角胶囊按钮：主窗口「设置 / 刷新」与设置窗口「显示主界面」共用 */
+#btn-settings,
+#btn-main,
+#btn-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+#btn-settings svg,
+#btn-main svg,
+#btn-refresh svg {
+  width: 13px;
+  height: 13px;
+}
+
+#btn-settings:hover,
+#btn-main:hover,
+#btn-refresh:hover {
+  background: rgba(255, 255, 255, 0.3);
+  box-shadow: 0 2px 10px rgba(20, 30, 80, 0.25);
+}
+
+#btn-settings:active,
+#btn-main:active,
+#btn-refresh:active {
+  transform: scale(0.96);
+}
+
+/* 自定义窗口控制按钮：仿 macOS 红黄绿灯。
+   hover 整个控件组：三颗同时浮现符号并微微提亮（macOS 只亮一颗，这里按需求全亮）。 */
+#topbar .window-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  margin-right: 2px;
+}
+
+#topbar .win-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.72);
+  line-height: 0;
+}
+
+/* 符号绝对定位钉死在圆钮正中心，任何渲染差异都不会让它偏位 */
+#topbar .win-btn .icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: block;
+  width: 9px;
+  height: 9px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+#topbar .win-btn.win-close .icon {
+  width: 11px;
+  height: 11px;
+}
+
+#topbar .window-controls:hover .win-btn {
+  filter: brightness(1.12);
+}
+
+#topbar .window-controls:hover .win-btn .icon {
+  opacity: 1;
+}
+
+#topbar .win-btn.win-close {
+  background: #ff5f57;
+}
+
+#topbar .win-btn.win-min {
+  background: #febc2e;
+}
+
+#topbar .win-btn.win-full {
+  background: #28c840;
+}
+
+/* ---------- status pill ---------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef0f5;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pill[data-state="running"] {
+  background: #e7f7ee;
+  color: var(--ok);
+}
+
+.pill[data-state="starting"] {
+  background: #fdf3e0;
+  color: var(--warn);
+}
+
+.pill[data-state="error"] {
+  background: #fdeaea;
+  color: var(--err);
+}
+
+/* ---------- layout ---------- */
+
+/* 无边框窗口的"机身"：圆角 + 完全干净的边缘（无描边、无投影，圆角外透桌面）。
+   全屏时由 JS 加 class 收起圆角（macOS 全屏为直角满屏）。 */
+#app-shell {
+  height: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+body.win-fullscreen #app-shell {
+  border-radius: 0;
+}
+
+#view {
+  position: relative;
+  height: calc(100vh - 40px);
+}
+
+#frame-wrap {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+}
+
+#frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* ---------- splash ---------- */
+
+.splash {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 18px 50px rgba(31, 36, 48, 0.1);
+  padding: 40px 48px;
+  max-width: 560px;
+  width: 100%;
+  text-align: center;
+}
+
+.logo-whale {
+  width: 72px;
+  height: 72px;
+}
+
+.card h1 {
+  font-size: 20px;
+  margin: 12px 0 2px;
+}
+
+.card .subtitle {
+  margin: 0 0 20px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.status-text {
+  color: var(--ink-2);
+  font-size: 13.5px;
+  min-height: 20px;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  margin: 16px auto;
+  border: 3px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.log {
+  margin: 16px 0 0;
+  padding: 12px;
+  max-height: 220px;
+  overflow: auto;
+  text-align: left;
+  background: #10131b;
+  color: #b9c2d4;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+/* ---------- settings ---------- */
+
+/* 设置窗口与主窗口一致：无边框 + 圆角机身，body 透明（圆角外透桌面）。 */
+.settings-body {
+  background: transparent;
+  overflow: hidden;
+}
+
+.settings-layout {
+  display: flex;
+  height: calc(100vh - 40px);
+  overflow: hidden;
+}
+
+.settings-side {
+  width: 196px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px 10px 12px;
+  border-right: 1px solid var(--line);
+  background: rgba(245, 247, 252, 0.6);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--ink-2);
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nav-item svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.nav-item:hover {
+  background: rgba(77, 107, 254, 0.08);
+  color: var(--ink);
+}
+
+.nav-item.active {
+  color: var(--brand);
+  background: rgba(77, 107, 254, 0.12);
+}
+
+.side-version {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+/* 来源徽标：内置运行时 / 复用系统运行时（置于版本区顶部；与版本行同宽、文字居中） */
+.side-src {
+  align-self: stretch;
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--brand);
+  background: rgba(77, 107, 254, 0.1);
+  border-radius: 999px;
+  padding: 5px 10px;
+}
+.side-tools {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.side-tool {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.side-tool-k {
+  color: var(--ink-3);
+}
+
+.side-tool-v {
+  color: var(--ink-2);
+}
+
+.settings-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 26px 28px;
+}
+
+.panel {
+  display: none;
+}
+
+.panel.active {
+  display: block;
+}
+
+/* ---------- 常规设置：拉起方式三列卡片 ---------- */
+
+.method-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* ---------- 服务运行日志 ---------- */
+
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+}
+
+.log-head h3 {
+  margin: 0;
+  font-size: 14px;
+  /* 与「已配对设备」标题（.devices-title）样式一致：600 字重 + 主文字色 */
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.log-view {
+  margin-top: 8px;
+  height: 220px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-empty {
+  color: var(--ink-3);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.method-card {
+  position: relative;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+.method-card input {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  margin: 0;
+}
+
+.method-card .option-title {
+  padding-right: 22px;
+  font-size: 13.5px;
+}
+
+.method-card .option-desc {
+  font-size: 12.5px;
+}
+
+.method-card .option-desc code {
+  word-break: break-all;
+}
+
+/* ---------- 服务控制：状态紧贴「dsh 服务控制」标题右侧 ---------- */
+
+/* 服务控制：启动/重启/停止服务（与代理控制按钮完全一致的胶囊样式） */
+.service-actions-row {
+  display: flex;
+  justify-content: space-around;
+  width: 100%;
+  margin-top: 20px;
+}
+
+/* 面板顶部大标题 */
+.panel-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 8px 0 14px;
+}
+
+/* ---------- 局域网访问：代理控制行 + 左侧二维码 + 右侧信息 ---------- */
+
+/* 代理控制（启动/重启/停止）位于二维码顶部、整行 space-around */
+.lan-controls {
+  display: flex;
+  justify-content: space-around;
+  width: 100%;
+  margin: 2px 0 18px;
+}
+
+.lan-layout {
+  display: flex;
+  gap: 30px;
+  align-items: stretch;
+  margin-top: 2px;
+}
+
+.lan-qr-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 代理状态：紧贴「局域网访问」标题右侧 */
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+
+.panel-title-row .panel-title {
+  margin: 0;
+}
+
+.lan-info-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* 标签与值同一行 */
+.lan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lan-row .lan-label {
+  flex-shrink: 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.lan-row .pair-url {
+  min-width: 0;
+}
+
+.lan-item .row {
+  margin-top: 0;
+}
+
+.lan-info-col .pair-url code {
+  display: block;
+  width: 320px;
+  height: 34px;
+  box-sizing: border-box;
+  line-height: 34px;
+  padding: 0 12px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 底部操作区：hint 之下、整体居中 */
+.lan-info-col .hint {
+  margin: 0 0 6px;
+}
+
+.lan-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+/* 已配对设备区整体靠左（其它行保持居中/space-around） */
+.lan-actions .lan-item {
+  align-self: flex-start;
+  width: 100%;
+}
+
+.lan-actions .row {
+  justify-content: space-around;
+  width: 100%;
+  margin-top: 0;
+}
+
+/* 胶囊操作按钮：图标 + 文字 */
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  color: var(--ink-2);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.action-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* hover：无背景变化，仅轻浮起 + 边框/文字提亮 */
+.action-btn:hover,
+.action-btn:active {
+  background: var(--card);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(31, 36, 48, 0.1);
+  border-color: #c9d2f7;
+  color: var(--ink);
+}
+
+/* 操作按钮统一宽度（以最长的「重启局域网代理服务」为基准）：
+   服务控制三枚（启动/重启/停止 dsh 服务）+ lan-actions 三枚（重新生成/复制二维码/复制链接）
+   + lan-controls 三枚（启动/重启/停止局域网代理服务） */
+.lan-actions .action-btn,
+.lan-controls .action-btn,
+.service-actions-row .action-btn {
+  width: 210px;
+  justify-content: center;
+  padding: 12px 20px;
+  font-size: 13.5px;
+}
+
+.lan-actions .action-btn svg,
+.lan-controls .action-btn svg,
+.service-actions-row .action-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 重点操作：重新生成（蓝描边）、停止代理（红描边） */
+.action-accent {
+  color: #3b55e8;
+  border-color: rgba(77, 107, 254, 0.45);
+}
+
+.action-accent:hover,
+.action-accent:active {
+  color: #3b55e8;
+  border-color: rgba(77, 107, 254, 0.8);
+  background: rgba(77, 107, 254, 0.06);
+}
+
+.action-danger {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.action-danger:hover,
+.action-danger:active {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.7);
+  background: rgba(220, 38, 38, 0.06);
+}
+
+.lan-info-col .lan-item:nth-child(2) {
+  margin-top: 8px;
+}
+
+/* ---------- 设置面板通用 ---------- */
+
+.setting-group {
+  margin-top: 18px;
+}
+
+/* dsh 服务控制面板：退出行为模块紧贴服务拉起方式，间距收窄 */
+#method-section + .setting-group {
+  margin-top: 8px;
+}
+
+/* dsh 服务控制面板：退出行为模块描述字号加大 2（较共享 .option-desc） */
+#method-section + .setting-group .option-desc {
+  font-size: 12.5px;
+}
+
+.setting-group h2 {
+  font-size: 14px;
+  margin: 0 0 4px;
+  padding-bottom: 8px;
+}
+
+/* 标题行：标题与提示文字同行展示 */
+.method-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.method-head .hint {
+  margin: 0;
+  flex: 1;
+}
+
+.hint {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 4px 0 14px;
+}
+
+.option {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.option:hover {
+  border-color: #c9d2f7;
+}
+
+.option:has(input:checked) {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(77, 107, 254, 0.14);
+}
+
+.option input {
+  margin-top: 3px;
+  accent-color: var(--brand);
+}
+
+.option-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.option-desc {
+  font-size: 10.5px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+
+.pnpm-row {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+
+.pnpm-row input {
+  flex: 1;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+}
+
+.pnpm-row input:focus {
+  border-color: var(--brand);
+}
+
+/* ---------- pairing（局域网访问面板共用样式） ---------- */
+
+.pair-qr {
+  width: 220px;
+  height: 220px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(31, 36, 48, 0.08);
+}
+
+.pair-qr svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.pair-code {
+  display: block;
+  width: 150px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0;
+  line-height: 35px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink);
+  border-radius: 10px;
+  border: 1.5px dashed #c9d2f7;
+  background: var(--card);
+}
+
+.pair-addr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.pair-url code {
+  display: inline-block;
+  font-size: 12px;
+  padding: 5px 10px;
+  background: #eef1fb;
+  color: #33427e;
+  border-radius: 8px;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* 已配对设备：靠左小标题 + 下方竖排列表 */
+.devices-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* 已配对设备（左）与代理服务日志（右）并排；标题均顶对齐（日志标题不再被按钮撑低） */
+.devices-log-row {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  width: 100%;
+}
+
+.devices-log-row .devices-block {
+  flex: 0 0 230px;
+}
+
+.devices-log-row .log-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.devices-log-row .log-col .log-head {
+  align-items: flex-start;
+  /* 服务面板的 log-head 靠 18px 顶部留白与按钮组拉开距离；并排布局里顶部要对齐，清零 */
+  margin-top: 0;
+}
+
+.devices-log-row .log-col .log-view {
+  height: 190px;
+}
+
+.devices-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+}
+
+/* 已配对设备：每台设备一行独立展示 */
+.pair-devices-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pair-devices-list li {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px 10px;
+  width: fit-content;
+}
+
+.pair-devices-list li.empty {
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-family: inherit;
+}
+
+/* ---------- toast ---------- */
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 42px;
+  transform: translate(-50%, 16px);
+  background: rgba(24, 28, 38, 0.94);
+  color: #fff;
+  font-size: 13px;
+  padding: 9px 18px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 999;
+  max-width: 80vw;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* ---------- 应用更新检测（设置页左侧版本区） ---------- */
+
+/* 检查更新按钮：来源徽标下方、通栏小胶囊 */
+.update-check-btn {
+  margin-top: 8px;
+  width: 100%;
+  padding: 4px 0;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  color: var(--brand);
+  border-color: rgba(77, 107, 254, 0.35);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.update-check-btn:hover {
+  background: rgba(77, 107, 254, 0.08);
+  border-color: rgba(77, 107, 254, 0.6);
+}
+
+.update-check-btn:active {
+  transform: scale(0.97);
+}
+
+/* 更新状态行：检查中 / 失败 / 发现新版本 / 已是最新 */
+.update-status {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.update-status.checking {
+  color: var(--ink-3);
+}
+
+.update-status.error {
+  color: var(--err);
+}
+
+.update-status.has-update {
+  color: var(--warn);
+}
+
+.update-status.latest {
+  color: var(--ok);
+}
+
+/* 前往下载 / 忽略 链接 */
+.update-status a {
+  color: var(--brand);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.update-status a:hover {
+  text-decoration: underline;
+}
+
+.update-status a.update-ignore {
+  color: var(--ink-3);
+  font-weight: 400;
+  text-decoration: underline;
+}
+
+.update-status a.update-ignore:hover {
+  color: var(--ink-2);
+}
+
+/* ---------- 打赏支持作者（设置页面板） ---------- */
+
+/* 推荐主卡片：OpenCode Go 邀请链接订阅 */
+.donate-block {
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-top: 6px;
+}
+
+.donate-primary {
+  border-color: rgba(77, 107, 254, 0.45);
+  box-shadow: 0 0 0 3px rgba(77, 107, 254, 0.06);
+}
+
+.donate-block-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.donate-logo {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  color: var(--brand);
+}
+
+.donate-block-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.donate-block-desc {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+
+/* 邀请订阅主按钮：通栏、蓝底高亮 */
+.donate-cta {
+  width: 100%;
+  justify-content: center;
+  margin-top: 16px;
+  padding: 12px 20px;
+  font-size: 14px;
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.donate-cta:hover,
+.donate-cta:active {
+  background: var(--brand-dark);
+  border-color: var(--brand-dark);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(77, 107, 254, 0.35);
+}
+
+.donate-cta svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 订阅套餐额度三格 */
+.donate-quota-title {
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.donate-quotas {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.quota-cell {
+  flex: 1;
+  background: #f6f7fb;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+
+.quota-k {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.quota-v {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.donate-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.6;
+}
+
+/* 额度下方的卖点提示：用便宜模型 → 几乎无 Token 焦虑 */
+.donate-quota-hint {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand);
+  text-align: center;
+}

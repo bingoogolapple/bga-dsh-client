@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!-- 退出应用：电源符号 -->
+  <g stroke="#000000" stroke-width="2.6" stroke-linecap="round">
+    <circle cx="18" cy="19.6" r="10.2" fill="none"/>
+    <path d="M18 7.4 V19.6"/>
+  </g>
+</svg>

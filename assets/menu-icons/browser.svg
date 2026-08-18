@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!-- 浏览器中打开服务页面：外部链接（圆角方块 + 箭头出框） -->
+  <g fill="none" stroke="#000000" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="9.5" y="13" width="17" height="13.5" rx="3"/>
+    <path d="M17.5 22 L25.5 14"/>
+    <path d="M21.5 14 L25.5 14 L25.5 18"/>
+    <path d="M13.5 20.5 V24.5 H17.5"/>
+  </g>
+</svg>
