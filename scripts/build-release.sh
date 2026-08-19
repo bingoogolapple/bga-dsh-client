@@ -73,7 +73,9 @@ if [[ "$variant" == "bundled" || "$variant" == "two" ]]; then
   if runtime_fresh; then
     echo "复用 src-tauri/resources/runtime（$(du -sh src-tauri/resources/runtime | cut -f1)）"
   else
-    echo "生成/重建内置运行时（版本：node $DEFAULT_NODE_VER / dsh $DEFAULT_DSH_VERSION / pnpm $DEFAULT_PNPM_VERSION）…"
+    # 注意：macOS runner 自带 bash 3.2 会把变量名后紧跟的全角标点（如 ））并进
+    # 变量名导致 unbound variable，故此处必须用 ${VAR} 显式分隔边界。
+    echo "生成/重建内置运行时（版本：node $DEFAULT_NODE_VER / dsh $DEFAULT_DSH_VERSION / pnpm ${DEFAULT_PNPM_VERSION}）…"
     rm -rf src-tauri/resources/runtime
     node scripts/bundle-runtime.mjs
   fi
