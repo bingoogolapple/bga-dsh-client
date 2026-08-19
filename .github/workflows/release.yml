@@ -120,6 +120,8 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Cargo.lock 位于 src-tauri/ 下（Tauri 工程），不在仓库根目录
+          working-directory: src-tauri
 
       - name: 代码风格与静态检查
         working-directory: src-tauri

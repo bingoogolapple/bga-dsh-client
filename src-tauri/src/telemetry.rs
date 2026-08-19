@@ -10,7 +10,8 @@ use std::sync::Once;
 use serde_json::json;
 
 /// Sentry DSN（硬编码，公开值无需保密）
-const SENTRY_DSN: &str = "https://5d43070fac4fee36dd3eb4e605d66525@o81414.ingest.us.sentry.io/4511930940456960";
+const SENTRY_DSN: &str =
+    "https://5d43070fac4fee36dd3eb4e605d66525@o81414.ingest.us.sentry.io/4511930940456960";
 
 /// 全局初始化标记，确保只初始化一次。
 static INIT: Once = Once::new();
@@ -129,16 +130,12 @@ fn machine_id() -> String {
     let mut hasher = DefaultHasher::new();
 
     // hostname（跨平台可用）
-    if let Ok(name) = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-    {
+    if let Ok(name) = std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")) {
         name.hash(&mut hasher);
     }
 
     // 用户名作为辅助（不可逆，仅增加区分度）
-    if let Ok(user) = std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-    {
+    if let Ok(user) = std::env::var("USER").or_else(|_| std::env::var("USERNAME")) {
         user.hash(&mut hasher);
     }
 

@@ -323,11 +323,19 @@ pub fn ensure_started(app: &AppHandle) -> Result<(), String> {
             p.error = Some(tr(
                 locale,
                 "pair.port_busy",
-                &[&BASE_PORT.to_string(), &(BASE_PORT + 30).to_string(), &e.to_string()],
+                &[
+                    &BASE_PORT.to_string(),
+                    &(BASE_PORT + 30).to_string(),
+                    &e.to_string(),
+                ],
             ));
             push_log(
                 app,
-                tr(locale, "pair.port_busy_log", &[&BASE_PORT.to_string(), &(BASE_PORT + 30).to_string()]),
+                tr(
+                    locale,
+                    "pair.port_busy_log",
+                    &[&BASE_PORT.to_string(), &(BASE_PORT + 30).to_string()],
+                ),
             );
             return Err(p.error.clone().unwrap());
         }
@@ -488,7 +496,11 @@ async fn handle_request(
             drop(p);
             push_log(
                 &app,
-                tr(crate::i18n::current(&app), "pair.pair_ok_log", &[&peer.to_string()]),
+                tr(
+                    crate::i18n::current(&app),
+                    "pair.pair_ok_log",
+                    &[&peer.to_string()],
+                ),
             );
             return redirect_home_with_session(&token);
         }
@@ -509,7 +521,11 @@ async fn handle_request(
     if !trusted {
         push_log(
             &app,
-            tr(crate::i18n::current(&app), "pair.deny_log", &[&peer.to_string()]),
+            tr(
+                crate::i18n::current(&app),
+                "pair.deny_log",
+                &[&peer.to_string()],
+            ),
         );
         return denied_response(crate::i18n::current(&app));
     }
@@ -751,10 +767,7 @@ mod tests {
     fn rewrite_loopback_rewrites_host_and_origin() {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static("192.0.2.1:18080"));
-        headers.insert(
-            ORIGIN,
-            HeaderValue::from_static("http://192.0.2.1:18080"),
-        );
+        headers.insert(ORIGIN, HeaderValue::from_static("http://192.0.2.1:18080"));
         rewrite_loopback(&mut headers);
         assert_eq!(headers.get(HOST).unwrap(), "127.0.0.1:3080");
         assert_eq!(headers.get(ORIGIN).unwrap(), "http://127.0.0.1:3080");
@@ -813,10 +826,7 @@ mod tests {
         let uri = "/api/events.mux";
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static("192.0.2.1:18080"));
-        headers.insert(
-            ORIGIN,
-            HeaderValue::from_static("http://192.0.2.1:18080"),
-        );
+        headers.insert(ORIGIN, HeaderValue::from_static("http://192.0.2.1:18080"));
         headers.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
         headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
         headers.insert("sec-websocket-key", HeaderValue::from_static("abc123=="));
@@ -890,10 +900,7 @@ mod tests {
 
         // 大小写不敏感。
         let mut upper = HeaderMap::new();
-        upper.insert(
-            COOKIE,
-            HeaderValue::from_static("DSH_PAIR=XYZ"),
-        );
+        upper.insert(COOKIE, HeaderValue::from_static("DSH_PAIR=XYZ"));
         assert_eq!(extract_pair_cookie(&upper).as_deref(), Some("XYZ"));
 
         // 无 Cookie 或没有网关 Cookie → None。
@@ -906,10 +913,7 @@ mod tests {
     #[test]
     fn strip_pair_cookie_removes_only_own_cookie() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            COOKIE,
-            HeaderValue::from_static("a=1; dsh_pair=tok; b=2"),
-        );
+        headers.insert(COOKIE, HeaderValue::from_static("a=1; dsh_pair=tok; b=2"));
         strip_pair_cookie(&mut headers);
         let kept = headers.get(COOKIE).unwrap().to_str().unwrap();
         assert!(!kept.to_ascii_lowercase().contains("dsh_pair"));

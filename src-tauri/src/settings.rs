@@ -111,8 +111,12 @@ mod tests {
         assert_eq!(LaunchMethod::parse("builtin"), Some(LaunchMethod::Builtin));
         assert_eq!(LaunchMethod::parse("npx"), Some(LaunchMethod::Npx));
         assert_eq!(LaunchMethod::parse("docker"), None);
-        assert!(LaunchMethod::Builtin.display("", Locale::Zh).contains("内置 Node.js"));
-        assert!(LaunchMethod::Builtin.display("", Locale::En).contains("Built-in Node.js"));
+        assert!(LaunchMethod::Builtin
+            .display("", Locale::Zh)
+            .contains("内置 Node.js"));
+        assert!(LaunchMethod::Builtin
+            .display("", Locale::En)
+            .contains("Built-in Node.js"));
     }
 
     /// 新语义键名读取 + 缺省字段回退默认值。

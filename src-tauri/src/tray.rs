@@ -35,7 +35,9 @@ impl TrayMenu {
         let _ = self.show.set_text(tr(locale, "tray.show_main", &[]));
         let _ = self.browser.set_text(tr(locale, "tray.open_browser", &[]));
         let _ = self.start.set_text(tr(locale, "tray.start_service", &[]));
-        let _ = self.restart.set_text(tr(locale, "tray.restart_service", &[]));
+        let _ = self
+            .restart
+            .set_text(tr(locale, "tray.restart_service", &[]));
         let _ = self.stop.set_text(tr(locale, "tray.stop_service", &[]));
         let _ = self.quit.set_text(tr(locale, "tray.quit", &[]));
     }
@@ -150,7 +152,8 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<TrayMenu> {
     let menu = Menu::with_items(
         app,
         &[
-            &settings, &show, &browser, &sep1, &start, &restart, &stop, &lan, &sep2, &donate, &github, &sep3, &quit,
+            &settings, &show, &browser, &sep1, &start, &restart, &stop, &lan, &sep2, &donate,
+            &github, &sep3, &quit,
         ],
     )?;
 
@@ -230,7 +233,9 @@ pub fn open_settings_panel(app: &AppHandle, panel: &str) {
         if !panel.is_empty() {
             // 窗口已加载完成：直接调用前端暴露的面板切换入口。
             // （刚创建尚未加载完成的极短竞态下静默跳过，服务操作下一终态会再次触发。）
-            let _ = w.eval(&format!("window.__openPanel && window.__openPanel({panel:?})"));
+            let _ = w.eval(format!(
+                "window.__openPanel && window.__openPanel({panel:?})"
+            ));
         }
         return;
     }

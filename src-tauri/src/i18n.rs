@@ -18,8 +18,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::AppState;
 
 /// 支持的语言。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Locale {
+    #[default]
     Zh,
     En,
 }
@@ -34,17 +35,11 @@ impl Locale {
 
     /// 解析 preference 值：主标签匹配，`zh` 前缀 → 中文，`en` 前缀 → 英文，其余回退中文。
     fn parse(value: &str) -> Locale {
-        let tag = value.trim().split(|c| c == '-' || c == '_').next().unwrap_or("");
+        let tag = value.trim().split(['-', '_']).next().unwrap_or("");
         match tag {
             "en" => Locale::En,
             _ => Locale::Zh,
         }
-    }
-}
-
-impl Default for Locale {
-    fn default() -> Self {
-        Locale::Zh
     }
 }
 
@@ -107,11 +102,7 @@ fn locale_from_yaml(content: &str) -> Option<String> {
 /// 从 `locale: { preference: zh }` 这类行内对象中提取 preference 值。
 fn scalar_of_inline(rest: &str) -> Option<String> {
     let after = rest.split("preference:").nth(1)?;
-    let value = after
-        .split(|c| c == '}' || c == ',')
-        .next()
-        .unwrap_or("")
-        .trim();
+    let value = after.split(['}', ',']).next().unwrap_or("").trim();
     (!value.is_empty()).then(|| unquote(value))
 }
 
@@ -163,7 +154,7 @@ pub fn resolve() -> Locale {
 // 占位符 `{0}`、`{1}` 由 tr() 按参数顺序替换。
 // ---------------------------------------------------------------------------
 
-pub fn msg<'a>(locale: Locale, key: &'a str) -> &'a str {
+pub fn msg(locale: Locale, key: &str) -> &str {
     match (locale, key) {
         // 系统托盘
         (_, "tray.settings") => if_en(locale, "Settings", "客户端设置"),
@@ -278,7 +269,7 @@ pub fn global() -> Locale {
 
 /// 读 AppState 中的当前语言。
 pub fn current(app: &AppHandle) -> Locale {
-    app.state::<AppState>().locale.lock().unwrap().clone()
+    *app.state::<AppState>().locale.lock().unwrap()
 }
 
 /// 更新进程级语言（setup 初始化、watcher 变更时调用）。
@@ -358,8 +349,14 @@ mod tests {
 
     #[test]
     fn parses_json_preference() {
-        assert_eq!(locale_from_json(r#"{"locale":{"preference":"zh"}}"#).as_deref(), Some("zh"));
-        assert_eq!(locale_from_json(r#"{"locale":{"preference":"en"}}"#).as_deref(), Some("en"));
+        assert_eq!(
+            locale_from_json(r#"{"locale":{"preference":"zh"}}"#).as_deref(),
+            Some("zh")
+        );
+        assert_eq!(
+            locale_from_json(r#"{"locale":{"preference":"en"}}"#).as_deref(),
+            Some("en")
+        );
         assert_eq!(locale_from_json("{}"), None);
     }
 
@@ -384,8 +381,14 @@ mod tests {
             tr(Locale::En, "svc.orphan_reuse", &["1234"]),
             "Taking over the service left from last exit (PID 1234), reusing it directly"
         );
-        assert_eq!(tr(Locale::Zh, "pair.start_log", &["192.168.1.5", "18080", "123456"]),
-            "启动局域网代理服务：http://192.168.1.5:18080（一次性配对码 123456）");
+        assert_eq!(
+            tr(
+                Locale::Zh,
+                "pair.start_log",
+                &["192.168.1.5", "18080", "123456"]
+            ),
+            "启动局域网代理服务：http://192.168.1.5:18080（一次性配对码 123456）"
+        );
     }
 
     #[test]

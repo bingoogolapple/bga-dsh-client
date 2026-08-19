@@ -153,14 +153,19 @@ struct VersionInfo {
 /// 执行 `prog [args]` 并捕获 stdout 原文（trim 后）；超时或失败返回 None。
 /// 不经 shell（Windows 系统命令走 cmd /C，见 sys_version）。
 /// `extra_path`：可选的 PATH 覆盖值（仅 Unix 生效），用于在 Dock 启动等短 PATH 场景下定位 node/pnpm/dsh。
-fn run_capture(prog: &Path, args: &[&std::ffi::OsStr], timeout: std::time::Duration, extra_path: Option<&str>) -> Option<String> {
+fn run_capture(
+    prog: &Path,
+    args: &[&std::ffi::OsStr],
+    timeout: std::time::Duration,
+    _extra_path: Option<&str>,
+) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     use std::time::Instant;
     let mut builder = Command::new(prog);
     builder.args(args);
     #[cfg(not(windows))]
-    if let Some(path) = extra_path {
+    if let Some(path) = _extra_path {
         builder.env("PATH", path);
     }
     let mut child = builder
@@ -231,7 +236,10 @@ fn running_dsh_version() -> Option<String> {
         "payload": {},
     });
     let resp: serde_json::Value = client
-        .post(format!("http://127.0.0.1:{}/api/host.describe", service::DSH_PORT))
+        .post(format!(
+            "http://127.0.0.1:{}/api/host.describe",
+            service::DSH_PORT
+        ))
         .json(&body)
         .send()
         .ok()?
@@ -325,18 +333,20 @@ fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
     };
     // 七个探测并行跑（<1s 返回），互不阻塞
     let (r_node, r_pnpm, r_dsh, s_node, s_pnpm, s_dsh, running) = std::thread::scope(|s| {
-        let rn = s.spawn(|| {
-            match &node_bin {
-                Some(b) => run_capture(b, &[OsStr::new("--version")], timeout, None),
-                None => None,
-            }
+        let rn = s.spawn(|| match &node_bin {
+            Some(b) => run_capture(b, &[OsStr::new("--version")], timeout, None),
+            None => None,
         });
         let rp = s.spawn(|| match (&node_bin, &pnpm_cjs) {
-            (Some(b), Some(p)) => run_capture(b, &[p.as_os_str(), OsStr::new("--version")], timeout, None),
+            (Some(b), Some(p)) => {
+                run_capture(b, &[p.as_os_str(), OsStr::new("--version")], timeout, None)
+            }
             _ => None,
         });
         let rd = s.spawn(|| match (&node_bin, &dsh_js) {
-            (Some(b), Some(d)) => run_capture(b, &[d.as_os_str(), OsStr::new("--version")], timeout, None),
+            (Some(b), Some(d)) => {
+                run_capture(b, &[d.as_os_str(), OsStr::new("--version")], timeout, None)
+            }
             _ => None,
         });
         #[cfg(not(windows))]

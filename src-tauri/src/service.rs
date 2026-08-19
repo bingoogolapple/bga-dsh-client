@@ -202,11 +202,17 @@ impl ServiceManager {
 
     fn start_inner(&self, handle: &AppHandle) {
         if self.starting.load(Ordering::SeqCst) {
-            self.finish(handle, tr(crate::i18n::current(handle), "svc.starting_wait", &[]));
+            self.finish(
+                handle,
+                tr(crate::i18n::current(handle), "svc.starting_wait", &[]),
+            );
             return;
         }
         if self.child.lock().unwrap().is_some() {
-            self.finish(handle, tr(crate::i18n::current(handle), "svc.already_running", &[]));
+            self.finish(
+                handle,
+                tr(crate::i18n::current(handle), "svc.already_running", &[]),
+            );
             return;
         }
         // 上次退出放生的服务仍在运行：接管，继续管理。
@@ -214,7 +220,11 @@ impl ServiceManager {
             if process_alive(pid) {
                 self.finish(
                     handle,
-                    tr(crate::i18n::current(handle), "svc.orphan_reuse", &[&pid.to_string()]),
+                    tr(
+                        crate::i18n::current(handle),
+                        "svc.orphan_reuse",
+                        &[&pid.to_string()],
+                    ),
                 );
                 return;
             }
@@ -231,7 +241,10 @@ impl ServiceManager {
 
         self.starting.store(true, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
-        self.set_detail(handle, tr(crate::i18n::current(handle), "svc.starting", &[]));
+        self.set_detail(
+            handle,
+            tr(crate::i18n::current(handle), "svc.starting", &[]),
+        );
         self.emit_status(handle);
         let start_time = Instant::now();
 
@@ -276,7 +289,11 @@ impl ServiceManager {
                 self.failed.store(true, Ordering::SeqCst);
                 self.finish(
                     handle,
-                    tr(crate::i18n::current(handle), "svc.spawn_failed", &[&e.to_string()]),
+                    tr(
+                        crate::i18n::current(handle),
+                        "svc.spawn_failed",
+                        &[&e.to_string()],
+                    ),
                 );
                 return;
             }
@@ -395,7 +412,10 @@ impl ServiceManager {
         let mine_child = self.child.lock().unwrap().take();
         let mine_orphan = self.orphan.lock().unwrap().take();
         if let Some(mut child) = mine_child {
-            self.set_detail(handle, tr(crate::i18n::current(handle), "svc.stopping", &[]));
+            self.set_detail(
+                handle,
+                tr(crate::i18n::current(handle), "svc.stopping", &[]),
+            );
             self.emit_status(handle);
             kill_tree(&mut child);
             self.wait_port_free(handle);
@@ -403,7 +423,10 @@ impl ServiceManager {
             self.finish(handle, tr(crate::i18n::current(handle), "svc.stopped", &[]));
             crate::telemetry::capture_event("service_stopped", None);
         } else if let Some(pid) = mine_orphan {
-            self.set_detail(handle, tr(crate::i18n::current(handle), "svc.stopping", &[]));
+            self.set_detail(
+                handle,
+                tr(crate::i18n::current(handle), "svc.stopping", &[]),
+            );
             self.emit_status(handle);
             kill_group(pid);
             self.wait_port_free(handle);
@@ -411,9 +434,15 @@ impl ServiceManager {
             self.finish(handle, tr(crate::i18n::current(handle), "svc.stopped", &[]));
             crate::telemetry::capture_event("service_stopped", None);
         } else if Self::is_up() {
-            self.finish(handle, tr(crate::i18n::current(handle), "svc.external_no_stop", &[]));
+            self.finish(
+                handle,
+                tr(crate::i18n::current(handle), "svc.external_no_stop", &[]),
+            );
         } else {
-            self.finish(handle, tr(crate::i18n::current(handle), "svc.none_running", &[]));
+            self.finish(
+                handle,
+                tr(crate::i18n::current(handle), "svc.none_running", &[]),
+            );
         }
     }
 
@@ -493,15 +522,16 @@ pub fn auto_boot(handle: &AppHandle) {
                     *sm.orphan.lock().unwrap() = Some(pid);
                     sm.set_detail(
                         &h,
-                        tr(crate::i18n::current(&h), "svc.orphan_takeover", &[&pid.to_string()]),
+                        tr(
+                            crate::i18n::current(&h),
+                            "svc.orphan_takeover",
+                            &[&pid.to_string()],
+                        ),
                     );
                     detection = "orphan_takeover";
                 }
                 None => {
-                    sm.set_detail(
-                        &h,
-                        tr(crate::i18n::current(&h), "svc.external_reuse", &[]),
-                    );
+                    sm.set_detail(&h, tr(crate::i18n::current(&h), "svc.external_reuse", &[]));
                     detection = "external_reuse";
                 }
             }
@@ -616,7 +646,8 @@ pub(crate) fn now_ts() -> String {
 pub(crate) fn now_ts() -> String {
     unsafe {
         let t = libc::time(std::ptr::null_mut());
-        let tm = *libc::localtime(&t);
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_s(&mut tm, &t);
         format!(
             "[{:04}-{:02}-{:02} {:02}:{:02}:{:02}]",
             tm.tm_year + 1900,
@@ -635,7 +666,9 @@ pub(crate) fn rotate_logs(app: &AppHandle, max: u64) {
     for name in ["service.log", "pairing.log"] {
         let dir = files_dir(app);
         let path = dir.join(name);
-        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
         if meta.len() < max {
             continue;
         }
@@ -774,10 +807,7 @@ fn build_command(
             None => String::new(),
         };
         match method {
-            LaunchMethod::Npx => (
-                format!("{npm_prefix}npx --yes @deepseek-ai/dsh web"),
-                None,
-            ),
+            LaunchMethod::Npx => (format!("{npm_prefix}npx --yes @deepseek-ai/dsh web"), None),
             LaunchMethod::Dsh => ("dsh web".into(), None),
             LaunchMethod::Pnpm => {
                 let dir = if dir.trim().is_empty() { "." } else { dir };
