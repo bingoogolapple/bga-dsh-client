@@ -76,6 +76,10 @@ jobs:
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # 默认 minimal profile 不含 rustfmt/clippy，不装会导致
+          # `cargo fmt --check` 报 "cargo-fmt is not installed"
+          components: rustfmt, clippy
 
       - name: 缓存 Cargo 构建产物
         uses: Swatinem/rust-cache@v2
