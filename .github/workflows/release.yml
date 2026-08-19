@@ -1,11 +1,12 @@
 name: Release
 
-# 推送形如 v1.0.0 的 tag 时触发：在 macOS runner 上执行 pnpm tauri build，按矩阵
-# 分别构建 Apple Silicon（aarch64）与 Intel（x86_64）两个架构的 .app 与 dmg，
+# 推送形如 v1.0.0 的 tag 时触发：按平台矩阵（macOS Apple Silicon / macOS Intel /
+# Linux / Windows）执行 ./scripts/build-release.sh two 构建 plain 与 bundled 双版本，
+# 产出 macOS 的 .app/.dmg、Linux 的 .deb、Windows 的 NSIS .exe，
 # 然后自动创建对应的 GitHub Release 并上传全部产物作为下载附件。
 #
 # 注意：产物文件名里的版本号来自 src-tauri/tauri.conf.json（与 Cargo.toml 同步），
-# 打 tag 前请先把两处的 version 与 tag 保持一致（如 v0.1.0 ↔ 0.1.0）。
+# 打 tag 前请先把两处的 version 与 tag 保持一致（如 v0.0.2 ↔ 0.0.2）。
 on:
   push:
     tags:
@@ -16,7 +17,8 @@ on:
   # 真正发布仍走推送 v* tag 的流程（失败重试优先用 Actions 页的 Re-run 按钮）。
   workflow_dispatch:
 
-# 同 tag 重复推送时不并发发布，避免 Release 冲突；不取消已在进行中的构建。
+# 同一 ref（tag 或手动触发的分支）不并发，避免 Release 冲突或重复构建；
+# 不取消已在进行中的构建（排队等待）。
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -31,8 +33,8 @@ permissions:
 jobs:
   build-and-release:
     # 平台矩阵：macos-14 为 Apple Silicon（arm64），macos-15-intel 为 Intel（x86_64），
-    # ubuntu-24.04 为 Linux（x64，官方路径构建 + deb 产物），windows-latest 为 Win x64
-    # （官方路径构建 + NSIS 产物）。
+    # ubuntu-24.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
+    # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
     # macOS 13（旧 Intel runner）已公告下线，故 Intel 用 macos-15-intel。
     strategy:
       fail-fast: false
@@ -64,9 +66,9 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev xdg-utils
 
       # 内置运行时版本：唯一定义在 scripts/bundle-runtime.mjs 的常量行
-      # （NODE_VER / DSH_VERSION / PNPM_VERSION，不再有 env 覆盖）。
+      # （NODE_VER / DSH_VERSION / PNPM_VERSION，env 无覆盖项）。
       # CI 不硬编码版本，从这里读取（本地 build-release.sh 的 default_ver 同理）；
-      # 升版本请用 ./scripts/set-runtime-version.sh（只改 bundle-runtime.mjs + RUNTIME-VERSIONING.md）。
+      # 升版本请用 ./scripts/set-runtime-version.sh（只改 bundle-runtime.mjs + docs/RUNTIME-VERSIONING.md）。
       # shell: bash —— Windows runner 默认 pwsh，而本步骤用 bash 语法（$()、$GITHUB_OUTPUT）。
       - name: 读取内置运行时版本
         id: ver
@@ -93,15 +95,17 @@ jobs:
           workspaces: src-tauri
 
       - name: 安装 pnpm
-        # v5 起改用 Node24 runtime（v4 目标 Node20 已弃用）
+        # Node24 runtime 版本；version: 9 为 CI 构建工具版本，与
+        # pnpm-lock.yaml 的 lockfileVersion 匹配（非内置运行时版本）。
         uses: pnpm/action-setup@v6
         with:
           version: 9
 
       - name: 安装 Node.js
-        # v5 起改用 Node24 runtime（v4 目标 Node20 已弃用）。
-        # 本项目 package.json 无 packageManager 字段，v5+ 的自动缓存检测不会触发，
-        # 显式 cache: pnpm 行为与 v4 一致。
+        # Node24 runtime 版本；node-version: 22 为 CI 构建环境版本
+        # （LTS，与内置运行时版本相互独立）。
+        # 本项目 package.json 无 packageManager 字段，自动缓存检测不会触发，
+        # 故显式声明 cache: pnpm 与 lockfile 路径。
         uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -117,7 +121,7 @@ jobs:
       # key 必须含 matrix.platform：darwin-x64 与 linux-x64 的 arch 都是 x86_64，
       # 不带平台会互相抢同一个缓存键（每次各白重建一轮）+ 依赖时序互相覆盖。
       - name: 缓存内置 Node.js 运行时
-        # v5 起改用 Node24 runtime（v4 目标 Node20 已弃用）
+        # Node24 runtime 版本
         uses: actions/cache@v6
         with:
           path: src-tauri/resources/runtime
@@ -142,8 +146,8 @@ jobs:
         run: cargo test --locked
 
       - name: 依赖安全审计（cargo audit）
-        # 官方 v2 tag 仍用 node20 runtime（已弃用）；锁定到 main 已升级 node24
-        # 的 commit（待官方发新版 tag 后可切回 @vX）。输入项与 v2 一致。
+        # 官方最新 tag 仍用已弃用的 node20 runtime，故锁定到 main 分支上已
+        # 升级 node24 runtime 的 commit（官方发新版 tag 后可切回 @vX）。
         uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

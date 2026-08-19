@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 一键修改内置运行时版本（node / pnpm / dsh）：同步 bundle-runtime.mjs（全仓唯一版本源，
-# CI 与 build-release.sh 构建时自动读取）与 RUNTIME-VERSIONING.md 表格，可选重建验证。
+# CI 与 build-release.sh 构建时自动读取）与 docs/RUNTIME-VERSIONING.md 表格，可选重建验证。
 # 用法：
 #   ./scripts/set-runtime-version.sh                 # 交互式：选择组件 → 选择/输入版本
 #   ./scripts/set-runtime-version.sh node v24.11.0   # 非交互：直接改指定组件
@@ -64,7 +64,7 @@ apply_node() { # newver
   local new="$1" old="$CUR_NODE"
   [[ "$new" == "$old" ]] && { echo "node 版本无变化（${old}），跳过"; return; }
   edit_file scripts/bundle-runtime.mjs     "= '$old'"                    "= '$new'"
-  edit_file RUNTIME-VERSIONING.md                  "| Node.js | \`$old\` |"       "| Node.js | \`$new\` |"
+  edit_file docs/RUNTIME-VERSIONING.md                  "| Node.js | \`$old\` |"       "| Node.js | \`$new\` |"
   CUR_NODE="$new"
 }
 
@@ -72,7 +72,7 @@ apply_pnpm() {
   local new="$1" old="$CUR_PNPM"
   [[ "$new" == "$old" ]] && { echo "pnpm 版本无变化（${old}），跳过"; return; }
   edit_file scripts/bundle-runtime.mjs     "= '$old'"                       "= '$new'"
-  edit_file RUNTIME-VERSIONING.md                  "| pnpm | \`$old\` |"             "| pnpm | \`$new\` |"
+  edit_file docs/RUNTIME-VERSIONING.md                  "| pnpm | \`$old\` |"             "| pnpm | \`$new\` |"
   CUR_PNPM="$new"
 }
 
@@ -80,7 +80,7 @@ apply_dsh() {
   local new="$1" old="$CUR_DSH"
   [[ "$new" == "$old" ]] && { echo "dsh 版本无变化（${old}），跳过"; return; }
   edit_file scripts/bundle-runtime.mjs     "= '$old'"                         "= '$new'"
-  edit_file RUNTIME-VERSIONING.md                  "| @deepseek-ai/dsh | \`$old\` |"   "| @deepseek-ai/dsh | \`$new\` |"
+  edit_file docs/RUNTIME-VERSIONING.md                  "| @deepseek-ai/dsh | \`$old\` |"   "| @deepseek-ai/dsh | \`$new\` |"
   CUR_DSH="$new"
 }
 
@@ -212,4 +212,4 @@ echo "==> 提醒："
 echo "  1. 若 dsh/pnpm 版本变化，请提交新的 src-tauri/resources/runtime/rt/package.json 与 package-lock.json（保证后续 npm ci 秒装）"
 echo "  2. CI 发版前请把改动一起推送；cache key 已随版本自动失效"
 echo "  3. 改动摘要："
-git diff --stat -- scripts/bundle-runtime.mjs RUNTIME-VERSIONING.md
+git diff --stat -- scripts/bundle-runtime.mjs docs/RUNTIME-VERSIONING.md
