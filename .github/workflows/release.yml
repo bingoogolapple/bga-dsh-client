@@ -93,12 +93,16 @@ jobs:
           workspaces: src-tauri
 
       - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
+        # v5 起改用 Node24 runtime（v4 目标 Node20 已弃用）
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        # v5 起改用 Node24 runtime（v4 目标 Node20 已弃用）。
+        # 本项目 package.json 无 packageManager 字段，v5+ 的自动缓存检测不会触发，
+        # 显式 cache: pnpm 行为与 v4 一致。
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -113,7 +117,8 @@ jobs:
       # key 必须含 matrix.platform：darwin-x64 与 linux-x64 的 arch 都是 x86_64，
       # 不带平台会互相抢同一个缓存键（每次各白重建一轮）+ 依赖时序互相覆盖。
       - name: 缓存内置 Node.js 运行时
-        uses: actions/cache@v4
+        # v5 起改用 Node24 runtime（v4 目标 Node20 已弃用）
+        uses: actions/cache@v6
         with:
           path: src-tauri/resources/runtime
           key: dsh-runtime-${{ matrix.platform }}-${{ matrix.arch }}-${{ steps.ver.outputs.NODE_VER }}-${{ steps.ver.outputs.DSH_VERSION }}-${{ steps.ver.outputs.PNPM_VERSION }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
@@ -144,6 +149,17 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Cargo.lock 位于 src-tauri/ 下（Tauri 工程），不在仓库根目录
           working-directory: src-tauri
+          # 忽略以下 17 个「无维护/unsound」类 informational 警告（均为 Tauri v2
+          # 上游锁定依赖，应用层无法升级，升级 Tauri 后应随之移除）：
+          #  - RUSTSEC-2024-0413/0416/0412/0418/0411/0417/0414/0415/0420/0419：
+          #    gtk-rs GTK3 bindings（atk/gdk/gtk/gdkx11/gdkwayland 等），Tauri 在
+          #    Linux 依赖 webkit2gtk-4.1 引入，官方未提供可替换的 GTK4 绑定
+          #  - RUSTSEC-2024-0370：proc-macro-error（gtk3-macros 传递依赖）
+          #  - RUSTSEC-2025-0081/0075/0080/0100/0098：unic-*（urlpattern → tauri-utils 传递依赖）
+          #  - RUSTSEC-2024-0429：glib VariantStrIter 内存安全（需 >=0.20，但 gtk 0.18
+          #    配套锁定 glib 0.18；本项目未使用该 API，风险不可达）
+          # 新出现的漏洞（vulnerabilities）不受影响，仍会失败阻止发布。
+          ignore: RUSTSEC-2024-0413,RUSTSEC-2024-0416,RUSTSEC-2024-0412,RUSTSEC-2024-0418,RUSTSEC-2024-0411,RUSTSEC-2024-0417,RUSTSEC-2024-0414,RUSTSEC-2024-0415,RUSTSEC-2024-0420,RUSTSEC-2024-0419,RUSTSEC-2024-0370,RUSTSEC-2025-0081,RUSTSEC-2025-0075,RUSTSEC-2025-0080,RUSTSEC-2025-0100,RUSTSEC-2025-0098,RUSTSEC-2024-0429
 
       - name: 代码风格与静态检查
         working-directory: src-tauri
