@@ -1,4 +1,6 @@
-# 本地与 CI 统一使用的 Rust 工具链（dtolnay/rust-toolchain 自动读取本文件）。
+# 本地与 CI 统一使用的 Rust 工具链。本地 rustup 与 CI（release.yml 中
+# dtolnay/rust-toolchain 的 toolchain 输入）都会以本文件为准，需保持两者一致。
+# 注意：dtolnay/rust-toolchain 不会自动读取本文件，必须在 workflow 显式指定相同 channel。
 # 与开发机当前版本对齐；升级时先在此处确认再全局生效。
 [toolchain]
 channel = "1.97"
