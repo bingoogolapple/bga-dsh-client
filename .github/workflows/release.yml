@@ -51,14 +51,17 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v5
 
-      # Linux 打包的系统依赖（Tauri v2）：webkit2gtk-4.1 + GTK3 等，仅 ubuntu 需要
-      # （Windows runner 预装 WebView2 与 MSVC 工具链，无需额外安装）
+      # Linux 打包的系统依赖（Tauri v2 官方清单）：webkit2gtk-4.1 + GTK3 + tray + 图标渲染，
+      # 以及 xdg-utils（linuxdeploy/AppImage 及部分打包脚本需要）。仅 ubuntu 需要
+      # （Windows runner 预装 WebView2 与 MSVC 工具链，无需额外安装）。
+      # Ubuntu 24.04 的 tray 包名是 libayatana-appindicator3-dev（libappindicator3-dev
+      # 为 transitional 包），与官方文档的 libappindicator3-dev 二选一即可。
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev
+            libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev xdg-utils
 
       # 内置运行时版本：唯一定义在 scripts/bundle-runtime.mjs 的常量行
       # （NODE_VER / DSH_VERSION / PNPM_VERSION，不再有 env 覆盖）。
