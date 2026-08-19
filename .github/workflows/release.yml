@@ -10,15 +10,23 @@ on:
   push:
     tags:
       - 'v*'
+  # 手动触发入口（Actions 页 → Run workflow）：构建失败后不删 tag、直接重跑构建验证。
+  # 手动触发时 GITHUB_REF 是分支而非 v* tag，因此「校验 tag 与版本号一致」、zip 打包、
+  # 创建 Release 步骤均限定只在 tag 触发时执行——手动触发仅跑构建与检查、不发布。
+  # 真正发布仍走推送 v* tag 的流程（失败重试优先用 Actions 页的 Re-run 按钮）。
+  workflow_dispatch:
 
 # 同 tag 重复推送时不并发发布，避免 Release 冲突；不取消已在进行中的构建。
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# 允许工作流创建 Release、上传附件。
+# 允许工作流创建 Release、上传附件；
+# rustsec/audit-check 还需要 checks: write 才能创建 check run
+# （缺省 read-only token 会报 "Resource not accessible by integration"）。
 permissions:
   contents: write
+  checks: write
 
 jobs:
   build-and-release:
@@ -101,7 +109,9 @@ jobs:
           key: dsh-runtime-${{ matrix.platform }}-${{ matrix.arch }}-${{ steps.ver.outputs.NODE_VER }}-${{ steps.ver.outputs.DSH_VERSION }}-${{ steps.ver.outputs.PNPM_VERSION }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
 
       # shell: bash —— Windows runner 默认 pwsh，本步骤用 bash 语法（${var#v}、$(...)）
+      # 仅在 tag 触发时校验（手动触发时 ref 是分支名，无 tag 可比对）
       - name: 校验 tag 与版本号一致
+        if: github.ref_type == 'tag'
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -117,7 +127,9 @@ jobs:
         run: cargo test --locked
 
       - name: 依赖安全审计（cargo audit）
-        uses: rustsec/audit-check@v2
+        # 官方 v2 tag 仍用 node20 runtime（已弃用）；锁定到 main 已升级 node24
+        # 的 commit（待官方发新版 tag 后可切回 @vX）。输入项与 v2 一致。
+        uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Cargo.lock 位于 src-tauri/ 下（Tauri 工程），不在仓库根目录
@@ -148,17 +160,21 @@ jobs:
 
       # ditto 打包 .app 以保留符号链接与执行权限，行为与 zip -r 不同、更稳妥；
       # zip 文件名带架构后缀，避免多个矩阵产物重名。仅 macOS 产物有 .app（Linux 走 deb）。
-      - name: 打包 .app 为 zip（仅 macOS）
-        if: runner.os == 'macOS'
+      - name: 打包 .app 为 zip（仅 macOS，且仅 tag 触发时）
+        if: runner.os == 'macOS' && github.ref_type == 'tag'
         run: |
           cd dist/release/plain
           ditto -c -k --keepParent "DeepSeekHarness.app" "$GITHUB_WORKSPACE/DeepSeek-Harness-${{ matrix.arch }}-${{ github.ref_name }}.zip"
           cd "$GITHUB_WORKSPACE/dist/release/bundled"
           ditto -c -k --keepParent "DeepSeekHarness.app" "$GITHUB_WORKSPACE/DeepSeek-Harness-bundled-${{ matrix.arch }}-${{ github.ref_name }}.zip"
 
+      # 仅 tag 触发时创建/更新 Release（手动触发只构建不发布）；
+      # tag_name 显式指定，避免以分支名创建脏 tag。
       - name: 创建 Release 并上传 dmg / deb / exe / zip
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.ref_name }}
           # 从触发的 tag 自动生成 Release；按平台产出上传：
           # macOS → dmg + .app zip；Linux → deb；Windows → NSIS exe。glob 在无匹配平台自然跳过。
           files: |
