@@ -77,8 +77,15 @@ for (const f of readdirSync(nodeDir)) {
 }
 if (IS_WIN) {
   // Windows 官方分发为 zip（含顶层目录 node-v24.10.0-win-<arch>/，与 tar.gz 同构）。
-  // Windows 10+ 自带 bsdtar，直接解 zip 并剥顶层目录，避免引入第三方解压依赖。
-  execFileSync('tar', ['-xf', tarPath, '-C', nodeDir, '--strip-components=1'], { stdio: 'inherit' })
+  // 注意：GitHub Actions 的 Git Bash 里 PATH 优先的是 MSYS GNU tar，它会把 `D:\`
+  // 盘符误解析为远程主机（"Cannot connect to D:"），因此 Windows 本机必须显式调用
+  // 系统自带 bsdtar（System32\tar.exe，支持解 zip + --strip-components）。
+  // 交叉捆绑（在 mac/linux 上 TARGET=win32）路径为正斜杠，走 PATH 里的 tar 即可。
+  const tarBin =
+    process.platform === 'win32'
+      ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+      : 'tar'
+  execFileSync(tarBin, ['-xf', tarPath, '-C', nodeDir, '--strip-components=1'], { stdio: 'inherit' })
 } else {
   execFileSync('tar', ['-xzf', tarPath, '-C', nodeDir, '--strip-components=1'], { stdio: 'inherit' })
 }
