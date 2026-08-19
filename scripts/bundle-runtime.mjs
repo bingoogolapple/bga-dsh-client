@@ -106,7 +106,14 @@ const npmCli = IS_WIN
 // 交叉捆绑时用本机 node 执行 npm-cli.js（node.exe 无法在 mac 上运行）；本机模式用捆绑 node
 const npmRunner = TARGET ? process.execPath : nodeBin
 const targetFlags = TARGET ? ['--os=' + (TARGET === 'win32' ? 'win32' : TARGET), '--cpu=' + ARCH] : []
-execFileSync(npmRunner, [npmCli, hasLock ? 'ci' : 'install', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--ignore-scripts', ...targetFlags], { stdio: 'inherit' })
+// macOS runner 上 v8 默认堆上限仅 ~2GB，npm 安装 dsh 依赖树时会 OOM
+// （Ineffective mark-compacts near heap limit），故显式提到 4GB（与
+// Ubuntu 16GB runner 的 v8 动态上限相当；机器内存足够，堆不会真正用满）。
+execFileSync(
+  npmRunner,
+  [npmCli, hasLock ? 'ci' : 'install', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--ignore-scripts', ...targetFlags],
+  { stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' } },
+)
 
 const dshBin = join(runtimeDir, 'node_modules', '.bin', 'dsh')
 const dshBinWin = join(runtimeDir, 'node_modules', '.bin', 'dsh.cmd')
