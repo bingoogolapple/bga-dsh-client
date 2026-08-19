@@ -10,9 +10,12 @@ src-tauri/gen/
 .vscode/
 .idea/
 
-# 内置 Node.js 运行时（打包产物，不入库）：nd=Node 二进制、rt/node_modules=安装产物；
-# rt/package.json + package-lock.json 提交（npm ci 可复现安装）
+# 内置 Node.js 运行时（打包产物，不入库）：nd=Node 二进制、rt/node_modules=安装产物、
+# runtime-manifest.json=生成记录。仅 rt/package.json + package-lock.json 提交（npm ci 可复现安装）。
+# 注意：runtime-manifest.json 一旦入库，CI 的 runtime_fresh() 会误判"已有 runtime"而跳过生成，
+# 导致 bundled 包缺少 Node 二进制（见 v0.0.2 macOS 产物 4.6MB 事故）。
 src-tauri/resources/runtime/nd/
 src-tauri/resources/runtime/rt/node_modules/
 src-tauri/resources/runtime/rt/*.zip
+src-tauri/resources/runtime/runtime-manifest.json
 dist/

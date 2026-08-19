@@ -47,12 +47,27 @@ if [[ "$variant" == "bundled" || "$variant" == "two" ]]; then
     fi
     node -e '
       const fs = require("fs")
+      const path = require("path")
       const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
       const [dn, dd, dp, plat] = process.argv.slice(2)
       const want = { nodeVersion: dn, dshVersion: dd, pnpmVersion: String(dp), platform: plat }
-      if (m.nodeVersion === want.nodeVersion && m.dshVersion === want.dshVersion && m.pnpmVersion === want.pnpmVersion && m.platform === want.platform) process.exit(0)
-      console.error(`[build-release] 已有 runtime ${m.nodeVersion}/${m.dshVersion}/${m.pnpmVersion}(${m.platform}) 与目标 ${want.nodeVersion}/${want.dshVersion}/${want.pnpmVersion}(${want.platform}) 不一致，重新生成`)
-      process.exit(1)
+      if (!(m.nodeVersion === want.nodeVersion && m.dshVersion === want.dshVersion && m.pnpmVersion === want.pnpmVersion && m.platform === want.platform)) {
+        console.error(`[build-release] 已有 runtime ${m.nodeVersion}/${m.dshVersion}/${m.pnpmVersion}(${m.platform}) 与目标 ${want.nodeVersion}/${want.dshVersion}/${want.pnpmVersion}(${want.platform}) 不一致，重新生成`)
+        process.exit(1)
+      }
+      // 内容完整性校验：manifest 匹配不代表文件齐全。历史上 runtime-manifest.json 曾
+      // 被误提交入库，CI 上 nd/ 被 gitignore 排除导致只复用空目录（bundled 包缺 Node）。
+      // 现在 manifest 不入库（见 .gitignore），此处再兜底：Node 可执行文件与 dsh 入口
+      // 任一缺失即判定不可复用，重新生成。
+      const base = path.dirname(process.argv[1])
+      const isWin = want.platform === "win32"
+      const nodeBin = path.join(base, "nd", isWin ? "node.exe" : "bin", isWin ? "" : "node")
+      const dshBin = path.join(base, "rt", "node_modules", ".bin", isWin ? "dsh.cmd" : "dsh")
+      if (!fs.existsSync(nodeBin) || !fs.existsSync(dshBin)) {
+        console.error(`[build-release] runtime manifest 匹配但内容缺失（缺 ${nodeBin} 或 ${dshBin}），重新生成`)
+        process.exit(1)
+      }
+      process.exit(0)
     ' "$mf" "$DEFAULT_NODE_VER" "$DEFAULT_DSH_VERSION" "$DEFAULT_PNPM_VERSION" "$plat"
   }
   if runtime_fresh; then
