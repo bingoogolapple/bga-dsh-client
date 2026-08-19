@@ -811,7 +811,7 @@ fn build_command(
             LaunchMethod::Dsh => ("dsh web".into(), None),
             LaunchMethod::Pnpm => {
                 let dir = if dir.trim().is_empty() { "." } else { dir };
-                (format!("pnpm dsh web"), Some(dir.to_string()))
+                ("pnpm dsh web".to_string(), Some(dir.to_string()))
             }
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => (
@@ -889,6 +889,7 @@ fn build_command(
     }
 }
 
+#[cfg(not(windows))]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
