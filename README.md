@@ -82,6 +82,10 @@ If you just want to use this desktop client, follow the steps below — **no Nod
 
 1. Open the [Releases](../../releases/latest) page of this repo and download the installer matching your OS from the latest release's assets:
    - **macOS**: `.dmg` file — open it and drag the app into "Applications".
+
+     > 🍎 **Which `.dmg` to download? (macOS only)** Check your chip first: Apple menu  → **About This Mac** → the "Chip" line.
+     > - **Apple (M-series)**: M1 / M2 / M3 / M4… (2020 and later) → download `*_aarch64.dmg`
+     > - **Intel**: Core i3 / i5 / i7… (before 2020) → download `*_x64.dmg`
    - **Windows**: `.exe` installer (NSIS) — double-click to run.
    - **Linux**: `.deb` package — install with `dpkg -i`.
 
