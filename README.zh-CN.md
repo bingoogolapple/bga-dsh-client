@@ -1,12 +1,15 @@
 # DeepSeek Harness 客户端
 
 [![Latest Release](https://img.shields.io/github/v/release/bingoogolapple/bga-dsh-client)](../../releases/latest)
+[![Bundled DSH](https://img.shields.io/badge/dsh-0.1.0--rc.8-4D6BFE)](scripts/bundle-runtime.mjs)
+[![Bundled Node](https://img.shields.io/badge/node-v24.19.0-339933)](scripts/bundle-runtime.mjs)
+[![Bundled pnpm](https://img.shields.io/badge/pnpm-11.22.0-F69220)](scripts/bundle-runtime.mjs)
 [![Build](https://img.shields.io/github/actions/workflow/status/bingoogolapple/bga-dsh-client/release.yml)](../../actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/bingoogolapple/bga-dsh-client)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/bingoogolapple/bga-dsh-client/total)](../../releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-000000)](https://www.apple.com/macos)
 
-**🌐 [English Documentation](README.md)**
+[English](README.md) | 中文
 
 一个把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Web 管理界面包装成桌面应用的桌面壳——基于 [Tauri](https://tauri.app) 构建，自动探测/拉起服务、常驻系统托盘、支持局域网扫码与内网穿透隧道配对访问。
 

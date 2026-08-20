@@ -1,12 +1,15 @@
 # DeepSeek Harness Client
 
 [![Latest Release](https://img.shields.io/github/v/release/bingoogolapple/bga-dsh-client)](../../releases/latest)
+[![Bundled DSH](https://img.shields.io/badge/dsh-0.1.0--rc.8-4D6BFE)](scripts/bundle-runtime.mjs)
+[![Bundled Node](https://img.shields.io/badge/node-v24.19.0-339933)](scripts/bundle-runtime.mjs)
+[![Bundled pnpm](https://img.shields.io/badge/pnpm-11.22.0-F69220)](scripts/bundle-runtime.mjs)
 [![Build](https://img.shields.io/github/actions/workflow/status/bingoogolapple/bga-dsh-client/release.yml)](../../actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/bingoogolapple/bga-dsh-client)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/bingoogolapple/bga-dsh-client/total)](../../releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-000000)](https://www.apple.com/macos)
 
-**🌐 [中文文档](README.zh-CN.md)**
+English | [中文](README.zh-CN.md)
 
 A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) web management UI into a desktop app — built with [Tauri](https://tauri.app), featuring automatic service detection/launching, a persistent system tray, and LAN QR-code pairing with public-tunnel access.
 
