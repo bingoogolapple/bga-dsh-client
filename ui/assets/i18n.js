@@ -100,11 +100,11 @@
       // 更新
       "update.checking": "正在检查更新…",
       "update.failed": "检查更新失败，请稍后重试",
-      "update.found": "发现新版本 v{0}",
+      "update.found": "发现客户端新版本 v{0}",
       "update.download": "前往下载",
       "update.ignore": "忽略",
       "update.ignored": "已忽略 v{0} ",
-      "update.latest": "已是最新版本 v{0}",
+      "update.latest": "客户端已是最新版本 v{0}",
 
       // 打赏
       "donate.title": "打赏支持作者",
@@ -217,11 +217,11 @@
 
       "update.checking": "Checking for updates…",
       "update.failed": "Update check failed, please try again later",
-      "update.found": "New version v{0} found",
+      "update.found": "New client version v{0} found",
       "update.download": "Download",
       "update.ignore": "Ignore",
       "update.ignored": "Ignored v{0} ",
-      "update.latest": "You are up to date (v{0})",
+      "update.latest": "Client up to date (v{0})",
 
       "donate.title": "Support the Author",
       "donate.hint": "If DeepSeekHarness has helped you, consider supporting the author. Best way: subscribe to OpenCode Go through the author's invite link — you and the author each get $5 in credit. Win-win!",
