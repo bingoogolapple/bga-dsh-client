@@ -57,16 +57,6 @@ button.primary:hover {
   background: var(--brand-dark);
 }
 
-button.danger {
-  background: #fff;
-  border-color: #f3c1c1;
-  color: var(--err);
-}
-
-button.danger:hover {
-  background: #fef2f2;
-}
-
 button.ghost {
   background: transparent;
 }
@@ -537,15 +527,6 @@ body.win-fullscreen #app-shell {
   display: block;
 }
 
-/* ---------- 常规设置：拉起方式三列卡片 ---------- */
-
-.method-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
 /* ---------- 服务运行日志 ---------- */
 
 .log-head {
@@ -581,35 +562,6 @@ body.win-fullscreen #app-shell {
   color: var(--ink-3);
   font-family: inherit;
   font-size: 13px;
-}
-
-.method-card {
-  position: relative;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-  margin-bottom: 0;
-  overflow: hidden;
-}
-
-.method-card input {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  margin: 0;
-}
-
-.method-card .option-title {
-  padding-right: 22px;
-  font-size: 13.5px;
-}
-
-.method-card .option-desc {
-  font-size: 12.5px;
-}
-
-.method-card .option-desc code {
-  word-break: break-all;
 }
 
 /* ---------- 服务控制：状态紧贴「dsh 服务控制」标题右侧 ---------- */
@@ -826,32 +778,10 @@ body.win-fullscreen #app-shell {
   margin-top: 18px;
 }
 
-/* dsh 服务控制面板：退出行为模块紧贴服务拉起方式，间距收窄 */
-#method-section + .setting-group {
-  margin-top: 8px;
-}
-
-/* dsh 服务控制面板：退出行为模块描述字号加大 2（较共享 .option-desc） */
-#method-section + .setting-group .option-desc {
-  font-size: 12.5px;
-}
-
 .setting-group h2 {
   font-size: 14px;
   margin: 0 0 4px;
   padding-bottom: 8px;
-}
-
-/* 标题行：标题与提示文字同行展示 */
-.method-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.method-head .hint {
-  margin: 0;
-  flex: 1;
 }
 
 .hint {
@@ -900,26 +830,6 @@ body.win-fullscreen #app-shell {
   line-height: 1.6;
 }
 
-.pnpm-row {
-  display: flex;
-  gap: 8px;
-  margin: 4px 0 6px;
-}
-
-.pnpm-row input {
-  flex: 1;
-  font: inherit;
-  font-size: 12.5px;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  outline: none;
-}
-
-.pnpm-row input:focus {
-  border-color: var(--brand);
-}
-
 /* ---------- pairing（局域网访问面板共用样式） ---------- */
 
 .pair-qr {
@@ -954,14 +864,6 @@ body.win-fullscreen #app-shell {
   border-radius: 10px;
   border: 1.5px dashed #c9d2f7;
   background: var(--card);
-}
-
-.pair-addr {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--ink-2);
 }
 
 .pair-url code {

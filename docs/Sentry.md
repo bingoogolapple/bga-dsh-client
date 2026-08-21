@@ -72,7 +72,6 @@ DSH 服务启动失败时上报（作为错误事件）。
 
 | 字段 | 示例值 | 说明 |
 |------|--------|------|
-| `launch_method` | `npx` / `dsh` / `pnpm` / `builtin` | 选择的拉起方式 |
 | `stop_service_on_quit` | `true` / `false` | 退出时是否停止服务 |
 
 ### 7. 设置页打开事件 (`settings_panel_opened`)

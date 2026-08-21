@@ -1,7 +1,8 @@
 //! DSH 服务生命周期管理：
 //! - 探测 127.0.0.1:3080 是否已有服务（外部服务直接复用，不做任何停止操作）；
-//! - 按设置的拉起方式启动子进程；子进程 stdout/stderr 追加写入日志文件，
-//!   由 tailer 线程轮询转发给前端（放生后服务仍可安全运行，不受管道 SIGPIPE 影响）；
+//! - 按自动判定的方式启动子进程（普通版 npx / 内置版内置 Node.js）；子进程 stdout/stderr
+//!   追加写入日志文件，由 tailer 线程轮询转发给前端（放生后服务仍可安全运行，
+//!   不受管道 SIGPIPE 影响）；
 //! - 用 `service.pid` 留存本应用启动过的服务 PID，跨启动可继续「接管」管理；
 //! - 停止/重启按进程组整棵结束；退出应用时按设置决定 停止 或 放生（detach）。
 
@@ -17,7 +18,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::i18n::tr;
-use crate::settings::LaunchMethod;
 use crate::AppState;
 
 pub const DSH_PORT: u16 = 3080;
@@ -27,8 +27,27 @@ const START_TIMEOUT: Duration = Duration::from_secs(180);
 /// 内置运行时在 Resources 中的目录名（与 scripts/bundle-runtime.mjs 的输出一致）。
 const RUNTIME_DIR: &str = "runtime";
 
+/// 拉起方式（完全自动，不来自用户配置）：
+/// - 普通版（无内置 runtime）→ `Npx`
+/// - 内置版（应用自带 runtime）→ `Builtin`
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LaunchMethod {
+    Npx,
+    Builtin,
+}
+
+impl LaunchMethod {
+    /// 用于展示给用户的命令描述。
+    fn display(self, locale: crate::i18n::Locale) -> String {
+        match self {
+            Self::Npx => "npx --yes @deepseek-ai/dsh web".into(),
+            Self::Builtin => tr(locale, "mth.builtin", &[]),
+        }
+    }
+}
+
 /// 内置 Node.js 运行时根目录：<Resources>/runtime。
-/// 非内置版打包没有该目录，返回 None（前端据此隐藏「内置 Node.js」方式）。
+/// 非内置版打包没有该目录，返回 None（此时自动走 npx 拉起）。
 pub fn runtime_root(handle: &AppHandle) -> Option<PathBuf> {
     let dir = handle.path().resource_dir().ok()?.join(RUNTIME_DIR);
     dir.is_dir().then_some(dir)
@@ -123,18 +142,12 @@ impl ServiceManager {
         } else {
             ServiceState::None
         };
-        let settings = {
-            let state = handle.state::<AppState>();
-            let guard = state.settings.lock().unwrap();
-            guard.clone()
-        };
-        // 内置版强制内置：状态展示与实际启动命令保持一致
+        // 拉起方式完全自动：内置版（应用自带 runtime）用内置 Node.js，普通版用 npx。
+        // 这里仅用于状态展示，与实际启动命令保持一致。
         let method = if runtime_root(handle).is_some() {
-            LaunchMethod::Builtin.display("", crate::i18n::current(handle))
+            LaunchMethod::Builtin.display(crate::i18n::current(handle))
         } else {
-            settings
-                .launch_method
-                .display(&settings.launch_dir, crate::i18n::current(handle))
+            LaunchMethod::Npx.display(crate::i18n::current(handle))
         };
         ServiceInfo {
             state,
@@ -248,38 +261,23 @@ impl ServiceManager {
         self.emit_status(handle);
         let start_time = Instant::now();
 
-        let settings = handle.state::<AppState>().settings.lock().unwrap().clone();
         let runtime = runtime_root(handle);
-        // 内置版（应用自带 runtime）强制使用内置 Node.js，不读用户设置；
-        // 普通版按设置走；设置停在内置方式但 runtime 缺失（异常/开发目录）时回退 npx。
+        // 拉起方式完全自动：内置版（应用自带 runtime）用内置 Node.js，普通版用 npx。
         let launch_method = if runtime.is_some() {
-            if settings.launch_method != LaunchMethod::Builtin {
-                self.push_log(
-                    handle,
-                    tr(crate::i18n::current(handle), "svc.builtin_forced", &[]),
-                );
-            }
             LaunchMethod::Builtin
         } else {
-            if settings.launch_method == LaunchMethod::Builtin {
-                self.push_log(
-                    handle,
-                    tr(crate::i18n::current(handle), "svc.builtin_fallback", &[]),
-                );
-            }
-            settings.launch_method
+            LaunchMethod::Npx
         };
         // 先确保 npx 独立缓存目录存在（绕过用户 ~/.npm 的权限/损坏问题）。
         let npm_cache = files_dir(handle).join("npm-cache");
         let _ = std::fs::create_dir_all(&npm_cache);
         let (shell_cmd, cwd) = build_command(
-            &launch_method,
-            &settings.launch_dir,
+            launch_method,
             runtime.as_deref(),
             Some(&npm_cache),
         );
         let launch_method_display =
-            launch_method.display(&settings.launch_dir, crate::i18n::current(handle));
+            launch_method.display(crate::i18n::current(handle));
         let log_path = files_dir(handle).join("service.log");
 
         let child = match spawn_shell(&shell_cmd, cwd.as_deref(), &log_path) {
@@ -367,6 +365,9 @@ impl ServiceManager {
     }
 
     /// 在后台观察子进程：若是本应用启动的且已退出，把状态重置为已停止并清理 pid 记录。
+    /// 注意：npx 壳进程退出 ≠ dsh 服务退出——npx 拉起 dsh 后自身退出、dsh 成孤儿继续跑。
+    /// 因此子进程退出时先查端口：仍在线则视为「放生孤儿」，转为接管对象（保留可停止/重启），
+    /// 而非误判为外部服务。
     fn spawn_exit_watcher(&self, handle: &AppHandle, my_pid: u32) {
         let h = handle.clone();
         std::thread::spawn(move || loop {
@@ -380,6 +381,17 @@ impl ServiceManager {
                 match guard.as_mut().unwrap().try_wait() {
                     Ok(Some(_)) => {
                         guard.take();
+                        if Self::is_up() {
+                            // dsh 服务仍在线：npx 壳退出了，服务变成孤儿。用端口反查真实
+                            // 服务 PID 记入 orphan，本次会话内仍可停止/重启，下次启动走接管分支。
+                            if let Some(real) = port_listener_pid() {
+                                *sm.orphan.lock().unwrap() = Some(real);
+                                sm.write_pid(&h, real);
+                                sm.set_detail(&h, tr(crate::i18n::current(&h), "svc.orphan_release", &[&real.to_string()]));
+                                sm.emit_status(&h);
+                                return;
+                            }
+                        }
                         sm.clear_pid(&h);
                         sm.set_detail(&h, tr(crate::i18n::current(&h), "svc.exited", &[]));
                         sm.emit_status(&h);
@@ -789,13 +801,21 @@ fn shell_path_prefix() -> String {
     format!("export PATH=\"{entries}\" 2>/dev/null; ")
 }
 
-/// 按设置构造 shell 命令与工作目录。
+/// 按自动判定的方式构造 shell 命令（返回命令与工作目录，后者恒为 None）。
+/// - `Npx`：`npx --yes @deepseek-ai/dsh web --no-open`
+///   （普通版，依赖系统 node/npx；不带版本号 → npx 解析 npm `latest` 标签，
+///   metadata 有缓存秒回；新版本发布后首次启动才会下载，之后复用 npm 缓存秒启。
+///   绝不加 `--prefer-online`——那会强制每次重新下载整个依赖树，重启卡死）
+/// - `Builtin`：用内置 Node.js 直跑 dsh（内置版，离线可用）
+///
+/// 统一追加 `--no-open`：DSH 服务已内嵌到本客户端 WebView，禁止 dsh 启动时
+/// 再自动打开系统浏览器。
+///
 /// `runtime` 为内置 Node.js 运行时根目录（None 表示非内置版或目录缺失）；
 /// `npm_cache` 为 npx 使用的独立缓存目录——npx 不再读写用户 ~/.npm，
 /// 绕开历史遗留的 root 属主/损坏缓存导致的 EACCES/EEXIST 问题。
 fn build_command(
-    method: &LaunchMethod,
-    dir: &str,
+    method: LaunchMethod,
     runtime: Option<&Path>,
     npm_cache: Option<&Path>,
 ) -> (String, Option<String>) {
@@ -806,20 +826,16 @@ fn build_command(
             Some(p) => format!("set \"npm_config_cache={}\" && ", p.display()),
             None => String::new(),
         };
+        let npx_dsh = "npx --yes @deepseek-ai/dsh web --no-open";
         match method {
-            LaunchMethod::Npx => (format!("{npm_prefix}npx --yes @deepseek-ai/dsh web"), None),
-            LaunchMethod::Dsh => ("dsh web".into(), None),
-            LaunchMethod::Pnpm => {
-                let dir = if dir.trim().is_empty() { "." } else { dir };
-                ("pnpm dsh web".to_string(), Some(dir.to_string()))
-            }
+            LaunchMethod::Npx => (format!("{npm_prefix}{npx_dsh}"), None),
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => (
-                    format!("\"{}\" \"{}\" web", node.display(), bin_js.display()),
+                    format!("\"{}\" \"{}\" web --no-open", node.display(), bin_js.display()),
                     None,
                 ),
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => (format!("{npm_prefix}npx --yes @deepseek-ai/dsh web"), None),
+                None => (format!("{npm_prefix}{npx_dsh}"), None),
             },
         }
     }
@@ -834,20 +850,9 @@ fn build_command(
             ),
             None => String::new(),
         };
+        let npx_dsh = "exec npx --yes @deepseek-ai/dsh web --no-open";
         match method {
-            LaunchMethod::Npx => (
-                format!("{path_prefix}{npm_prefix}exec npx --yes @deepseek-ai/dsh web"),
-                None,
-            ),
-            LaunchMethod::Dsh => (format!("{path_prefix}exec dsh web"), None),
-            LaunchMethod::Pnpm => {
-                let dir = if dir.trim().is_empty() { "." } else { dir };
-                let quoted = shell_quote(dir);
-                (
-                    format!("{path_prefix}cd {quoted} && exec pnpm dsh web"),
-                    Some(dir.to_string()),
-                )
-            }
+            LaunchMethod::Npx => (format!("{path_prefix}{npm_prefix}{npx_dsh}"), None),
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => {
                     // 内置 PATH：捆绑 node bin + dsh-runtime/.bin 置前，dsh plugin 的 pnpm / npx 能找到
@@ -872,7 +877,7 @@ fn build_command(
                         .join(":");
                     (
                         format!(
-                            "export PATH=\"{entries}\" 2>/dev/null; exec \"{}\" \"{}\" web",
+                            "export PATH=\"{entries}\" 2>/dev/null; exec \"{}\" \"{}\" web --no-open",
                             node.display(),
                             bin_js.display()
                         ),
@@ -881,7 +886,7 @@ fn build_command(
                 }
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
                 None => (
-                    format!("{path_prefix}{npm_prefix}exec npx --yes @deepseek-ai/dsh web"),
+                    format!("{path_prefix}{npm_prefix}{npx_dsh}"),
                     None,
                 ),
             },
@@ -955,17 +960,64 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
-/// 按进程组整体结束：SIGTERM → 宽限 → SIGKILL。
+/// 结束目标进程：优先按进程组整体结束（SIGTERM → 宽限 → SIGKILL）；
+/// 若该进程不是进程组组长（npx 拉起的 dsh 孤儿属于 shell 的组，`kill(-pid)` 会
+/// 因无此进程组而报 ESRCH），则退化为单进程 SIGTERM → SIGKILL，确保能停掉。
 #[cfg(unix)]
-fn kill_group(pid: u32) {
+fn _kill_group_or_single(pid: u32, group: bool) {
     let p = pid as i32;
+    let target = if group { -p } else { p };
     unsafe {
-        let _ = libc::kill(-p, libc::SIGTERM);
+        let _ = libc::kill(target, libc::SIGTERM);
     }
     std::thread::sleep(Duration::from_millis(1500));
     unsafe {
-        let _ = libc::kill(-p, libc::SIGKILL);
+        let _ = libc::kill(target, libc::SIGKILL);
     }
+}
+
+#[cfg(unix)]
+fn kill_group(pid: u32) {
+    // 先尝试进程组：若 ESRCH（无此进程组 / 不是组长），进程组信号无效。
+    unsafe {
+        if libc::kill(-(pid as i32), 0) == 0 {
+            _kill_group_or_single(pid, true);
+            return;
+        }
+    }
+    _kill_group_or_single(pid, false);
+}
+
+/// 查 127.0.0.1:DSH_PORT 上监听进程的真实 PID（npx 壳退出后 dsh 成为孤儿，
+/// 用端口反查才能拿到真正的服务进程，供接管/停止使用）。
+#[cfg(unix)]
+fn port_listener_pid() -> Option<u32> {
+    let out = Command::new("lsof")
+        .args([
+            "-nP",
+            "-iTCP:3080",
+            "-sTCP:LISTEN",
+            "-t",
+        ])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().next()?.trim().parse::<u32>().ok()
+}
+
+#[cfg(windows)]
+fn port_listener_pid() -> Option<u32> {
+    let out = Command::new("netstat")
+        .args(["-ano"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // 行形如 "  TCP   127.0.0.1:3080   0.0.0.0:0   LISTENING   12345"
+    text.lines()
+        .find(|l| {
+            l.contains(":3080") && l.contains("LISTENING")
+        })
+        .and_then(|l| l.split_whitespace().last()?.parse::<u32>().ok())
 }
 
 #[cfg(windows)]
@@ -979,4 +1031,64 @@ fn kill_group(pid: u32) {
 fn kill_tree(child: &mut Child) {
     kill_group(child.id());
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 普通版（Npx）：命令包含 npx @deepseek-ai/dsh web --no-open（不自动弹浏览器），
+    /// 且注入独立 npm 缓存目录。
+    #[test]
+    fn build_command_npx_injects_cache() {
+        let (cmd, cwd) = build_command(LaunchMethod::Npx, None, Some(Path::new("/tmp/npm-cache")));
+        assert!(cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"));
+        // 严禁 --prefer-online：会强制每次重新下载整个依赖树，导致重启卡死
+        assert!(!cmd.contains("prefer-online"), "cmd: {cmd}");
+        assert!(cmd.contains("npm_config_cache"));
+        assert!(cmd.contains("/tmp/npm-cache"));
+        assert_eq!(cwd, None);
+    }
+
+    /// 内置版（Builtin）+ runtime 存在：直接使用捆绑 node 直跑 dsh，而非 npx。
+    #[test]
+    fn build_command_builtin_uses_runtime_entry() {
+        // 构造一个模拟的 runtime 布局：nd/bin/node + rt/node_modules/@deepseek-ai/dsh/lib/bin.js
+        let fake = std::env::temp_dir().join("dsh-fake-runtime-test");
+        let node = fake.join("nd").join("bin").join("node");
+        let bin_js = fake
+            .join("rt")
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh")
+            .join("lib")
+            .join("bin.js");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(bin_js.parent().unwrap()).unwrap();
+        std::fs::write(&node, "").unwrap();
+        std::fs::write(&bin_js, "").unwrap();
+
+        let (cmd, cwd) = build_command(LaunchMethod::Builtin, Some(&fake), None);
+        assert!(cmd.contains(node.to_str().unwrap()), "cmd: {cmd}");
+        assert!(cmd.contains(bin_js.to_str().unwrap()), "cmd: {cmd}");
+        assert!(cmd.contains("web --no-open"), "cmd: {cmd}");
+        // 不再走 npx
+        assert!(!cmd.contains("npx"), "cmd: {cmd}");
+        assert_eq!(cwd, None);
+        let _ = std::fs::remove_dir_all(&fake);
+    }
+
+    /// 内置版 + runtime 缺失（异常/开发目录）：安全回退 npx，让日志暴露原因。
+    #[test]
+    fn build_command_builtin_falls_back_to_npx() {
+        let (cmd, _cwd) = build_command(
+            LaunchMethod::Builtin,
+            None,
+            Some(Path::new("/tmp/npm-cache")),
+        );
+        assert!(
+            cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"),
+            "cmd: {cmd}"
+        );
+    }
 }

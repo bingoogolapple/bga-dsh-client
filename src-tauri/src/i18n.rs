@@ -167,7 +167,6 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "tray.lan_service") => if_en(locale, "LAN Proxy Service Control", "局域网代理服务控制"),
         (_, "tray.donate") => if_en(locale, "Support the Author", "打赏支持作者"),
         (_, "win.settings_title") => if_en(locale, "Settings - DeepSeekHarness", "客户端设置 - DeepSeekHarness"),
-        (_, "pick.dir_title") => if_en(locale, "Select DeepSeekHarness Source Directory", "选择 DeepSeekHarness 源码目录"),
 
         // 版本信息
         (_, "ver.not_installed") => if_en(locale, "not installed", "未安装"),
@@ -178,8 +177,6 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "svc.orphan_reuse") => if_en(locale, "Taking over the service left from last exit (PID {0}), reusing it directly", "接管上次退出时保留的服务（PID {0}），直接复用"),
         (_, "svc.external_running") => if_en(locale, "Service already running on 127.0.0.1:3080 (started externally); reusing it, this app will not stop it", "检测到 127.0.0.1:3080 已有服务在运行（外部启动），直接复用，本应用不负责停止它"),
         (_, "svc.starting") => if_en(locale, "Starting service…", "正在启动服务…"),
-        (_, "svc.builtin_forced") => if_en(locale, "Bundled build: forced to use the built-in Node.js runtime (launch method setting ignored)", "内置版：已强制使用内置 Node.js 拉起服务（设置中的拉起方式已忽略）"),
-        (_, "svc.builtin_fallback") => if_en(locale, "No built-in Node.js runtime in this install; falling back to npx", "当前安装不含内置 Node.js 运行时，按设置（内置）回退 npx 拉起"),
         (_, "svc.spawn_failed") => if_en(locale, "Failed to spawn process: {0}", "启动进程失败：{0}"),
         (_, "svc.ready") => if_en(locale, "Service ready", "服务已就绪"),
         (_, "svc.fail_exited") => if_en(locale, ", process exited early", "，子进程提前退出"),
@@ -196,17 +193,13 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "svc.external_no_stop") => if_en(locale, "Externally started service detected; this app will not stop it (nor on quit)", "检测到外部启动的服务，本应用不执行停止（退出应用也不会停止它）"),
         (_, "svc.none_running") => if_en(locale, "No service is currently running", "当前没有运行中的服务"),
         (_, "svc.orphan_takeover") => if_en(locale, "Taking over the service left from last exit (PID {0}); can stop/restart from tray", "接管上次退出时保留的服务（PID {0}），可在托盘停止/重启"),
+        (_, "svc.orphan_release") => if_en(locale, "Launcher process exited, service continues running (PID {0}); can stop/restart from tray", "拉起进程已退出，服务仍在运行（PID {0}），可在托盘停止/重启"),
         (_, "svc.external_reuse") => if_en(locale, "Service already running on 127.0.0.1:3080; reusing it (not managed by this app)", "检测到 127.0.0.1:3080 已有服务在运行，直接复用（该服务不由本应用管理）"),
 
-        // 拉起方式描述
-        (_, "mth.npx") => "npx --yes @deepseek-ai/dsh web",
-        (_, "mth.dsh") => "dsh web",
-        (_, "mth.pnpm") => if_en(locale, "pnpm dsh web (dir: {0})", "pnpm dsh web（目录：{0}）"),
+        // 拉起方式描述（内置版专用文案；普通版 npx 命令为硬编码字符串）
         (_, "mth.builtin") => if_en(locale, "Built-in Node.js (bundled dsh, works offline)", "内置 Node.js（应用自带 dsh，离线可用）"),
 
         // 设置
-        (_, "set.unknown_method") => if_en(locale, "Unknown launch method: {0}", "未知的拉起方式：{0}"),
-        (_, "set.dir_required") => if_en(locale, "Method 3 requires choosing a directory", "方式三需要选择一个目录"),
         (_, "set.config_dir_missing") => if_en(locale, "Configuration directory is not initialized", "配置目录尚未初始化"),
 
         // 局域网配对

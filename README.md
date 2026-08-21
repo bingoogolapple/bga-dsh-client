@@ -22,11 +22,7 @@ A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai
 ### ⚙️ Service Management
 
 - **Start / Restart / Stop** the service from the main window footer, the settings window, or the tray menu; buttons are dynamically disabled by state (running → "Start" disabled, stopped → "Stop/Restart" disabled, starting or externally-owned → all three disabled).
-- **Four launch methods** (switchable in settings and remembered):
-  1. `npx --yes @deepseek-ai/dsh web` (default)
-  2. `dsh web` (globally installed)
-  3. `pnpm dsh web` from a custom directory
-  4. **Bundled Node.js** (`-bundled` builds only: the app ships its own runtime and works fully offline; bundled builds force this method and hide the method selector in settings)
+- **Two launch modes, chosen automatically** (nothing to configure): the plain build launches dsh via `npx --yes @deepseek-ai/dsh web --no-open` (tracks the npm `latest` release; cached installs reuse so restart is fast — never `--prefer-online`, which would re-download the whole tree every start); the bundled build (only the `-bundled` artifact) ships its own Node.js and dsh and works fully offline. The app picks the mode from the build type.
 - **Auto-detect + auto take over**: on startup it probes port 3080 — an externally running service is reused as-is (not taken over; Stop/Restart disabled); a service launched by this app, or released at last quit, is automatically taken over and can still be stopped/restarted.
 - Service logs stream live into `service.log` under the system app_config directory; files rotate automatically at 5 MB (two old archives kept). npx uses a **dedicated cache directory** (never touches the user's `~/.npm`, avoiding permission/corrupt-cache issues).
 - The status badge in the top bar and settings window updates in real time: stopped / starting / running / failed.

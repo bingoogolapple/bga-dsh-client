@@ -179,77 +179,31 @@
   };
 
   // ---------- 常规设置面板 ----------
-  const radios = document.querySelectorAll('input[name="launch_method"]');
-  const pnpmRow = $("pnpm-row");
-  const launchDirInput = $("launch-dir-input");
-  const btnPick = $("btn-pick");
-  const methodSection = $("method-section");
-  const methodNoteBuiltin = $("method-note-builtin");
-
-  let cfg = { launch_method: "npx", launch_dir: "", stop_service_on_quit: false };
+  // 服务拉起方式已完全自动（普通版 npx / 内置版内置 Node.js），无需配置。
+  let cfg = { stop_service_on_quit: false };
   try {
     cfg = await invoke("get_settings");
   } catch (e) {
     /* keep defaults */
   }
 
-  // 内置版（应用自带 runtime）：强制使用内置 Node.js，隐藏整个「服务拉起方式」模块；
-  // 非内置版暴露方式一/二/三（不再有方式四卡片）。
-  // 注：方式四是执行语义（rust 侧强制内置/回退），前端已无对应卡片。
+  // 是否内置 Node.js 运行时：仅用于版本区选择展示内置 runtime 版本还是系统 PATH 版本
+  //（启动方式本身由后端自动判定，前端无需配置）。
   let hasRuntime = false;
   try {
     hasRuntime = await invoke("has_bundled_runtime");
-    if (hasRuntime) {
-      methodSection.classList.add("hidden");
-      methodNoteBuiltin.classList.remove("hidden");
-    }
-    // 注：项目未发布过，无历史配置文件——非内置版不会读到 builtin 值，
-    // 不再做 builtin→npx 的回落迁移（已删除）。
   } catch (e) {
-    /* 命令不可用时按内置版处理，卡片保持可见 */
-  }
-
-  function currentMethod() {
-    return [...radios].find((r) => r.checked).value;
-  }
-
-  function sync() {
-    pnpmRow.classList.toggle("hidden", currentMethod() !== "pnpm");
+    /* 命令不可用时按普通版处理 */
   }
 
   // 变更即保存：无需手动点保存按钮
-  // 内置版不暴露方式配置，固定写回 builtin（rust 侧启动时亦强制内置）
   function persist() {
     const stop = $("stop-service-on-quit").checked;
-    const payload = hasRuntime
-      ? { launchMethod: "builtin", launchDir: "", stopServiceOnQuit: stop }
-      : {
-          launchMethod: currentMethod(),
-          launchDir: launchDirInput.value.trim(),
-          stopServiceOnQuit: stop,
-        };
-    invoke("save_settings", payload).catch((e) => toast(String(e)));
+    invoke("save_settings", { stopServiceOnQuit: stop }).catch((e) => toast(String(e)));
   }
 
-  radios.forEach((r) => {
-    r.checked = r.value === cfg.launch_method;
-    r.onchange = () => {
-      sync();
-      persist();
-    };
-  });
-  launchDirInput.value = cfg.launch_dir || "";
   $("stop-service-on-quit").checked = cfg.stop_service_on_quit !== false;
   $("stop-service-on-quit").onchange = persist;
-  sync();
-
-  btnPick.onclick = async () => {
-    const d = await invoke("pick_dir");
-    if (d) {
-      launchDirInput.value = d;
-      persist();
-    }
-  };
 
   // ---------- 服务控制面板 ----------
   let lastStat = null;
@@ -360,19 +314,26 @@
   // 服务在线但查不到版本（旧版服务 host.describe 返回占位符/探测失败）时展示
   // 「版本未知」，避免误导成「未安装」；否则内置包展示内置 runtime 版本、
   // 非内置包展示系统 PATH 生效版本。
+  // 展示流程：打开即渲染后端返回的缓存结果（秒回，不阻塞窗口），后端后台线程
+  // 重新完整探测后 emit `version-refreshed`，此处刷新为新值。
+  function renderVersions(v) {
+    if (!v) return;
+    const use = hasRuntime ? v.runtime : v.system;
+    $("v-node").textContent = use.node;
+    $("v-pnpm").textContent = use.pnpm;
+    $("v-dsh").textContent =
+      v.running ?? (v.service_up ? t("side.version_unknown") : use.dsh);
+    $("v-src").textContent = hasRuntime ? t("side.src_builtin") : t("side.src_system");
+  }
   (async () => {
     try {
-      const v = await invoke("get_version_info");
-      const use = hasRuntime ? v.runtime : v.system;
-      $("v-node").textContent = use.node;
-      $("v-pnpm").textContent = use.pnpm;
-      $("v-dsh").textContent =
-        v.running ?? (v.service_up ? t("side.version_unknown") : use.dsh);
-      $("v-src").textContent = hasRuntime ? t("side.src_builtin") : t("side.src_system");
+      renderVersions(await invoke("get_version_info"));
     } catch (e) {
       /* 保持「–」占位 */
     }
   })();
+  // 后端后台线程完整探测完成后推送新值（首次打开后 0~8s 内刷新）。
+  listen("version-refreshed", (e) => renderVersions(e.payload));
 
   // ---------- 局域网面板动作 ----------
   async function runLan(fn, okMsg) {
@@ -426,12 +387,7 @@
   window.addEventListener("dsh:locale", async () => {
     try {
       const v = await invoke("get_version_info");
-      const use = hasRuntime ? v.runtime : v.system;
-      $("v-node").textContent = use.node;
-      $("v-pnpm").textContent = use.pnpm;
-      $("v-dsh").textContent =
-        v.running ?? (v.service_up ? t("side.version_unknown") : use.dsh);
-      $("v-src").textContent = hasRuntime ? t("side.src_builtin") : t("side.src_system");
+      renderVersions(v);
     } catch (e) {
       /* keep placeholders */
     }

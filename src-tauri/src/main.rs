@@ -19,7 +19,7 @@ mod update;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::i18n::{tr, Locale};
 use crate::pairing::Pairing;
@@ -37,6 +37,9 @@ pub struct AppState {
     pub tray: Mutex<Option<Arc<TrayMenu>>>,
     /// 局域网扫码配对网关。
     pub pairing: Mutex<Pairing>,
+    /// 设置页左下角版本信息缓存（磁盘 version-cache.json + 内存渲染快照）。
+    /// get_version_info 秒回缓存，后台线程异步完整探测后刷新。
+    pub version_cache: Mutex<VersionCache>,
 }
 
 /// Web 前端读取当前语言（zh / en）。
@@ -50,7 +53,8 @@ fn query_status(app: tauri::AppHandle) -> service::ServiceInfo {
     app.state::<AppState>().sm.info(&app)
 }
 
-/// 应用是否内置 Node.js 运行时（false 时为非内置版，前端隐藏「内置 Node.js」方式）。
+/// 应用是否内置 Node.js 运行时（false 时为普通版）。前端据此选择展示
+/// 内置 runtime 版本还是系统 PATH 版本。
 #[tauri::command]
 fn has_bundled_runtime(app: tauri::AppHandle) -> bool {
     service::runtime_root(&app).is_some()
@@ -62,14 +66,10 @@ fn get_settings(app: tauri::AppHandle) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(
-    app: tauri::AppHandle,
-    launch_method: String,
-    launch_dir: String,
-    stop_service_on_quit: bool,
-) -> Result<(), String> {
-    let locale = i18n::current(&app);
-    let s = Settings::from_parts(&launch_method, &launch_dir, stop_service_on_quit, locale)?;
+fn save_settings(app: tauri::AppHandle, stop_service_on_quit: bool) -> Result<(), String> {
+    let s = Settings {
+        stop_service_on_quit,
+    };
     let path = app
         .state::<AppState>()
         .config_path
@@ -82,36 +82,10 @@ fn save_settings(
     crate::telemetry::capture_event(
         "settings_saved",
         Some(serde_json::json!({
-            "launch_method": launch_method,
             "stop_service_on_quit": stop_service_on_quit,
         })),
     );
     Ok(())
-}
-
-#[tauri::command]
-async fn pick_dir(app: tauri::AppHandle) -> Option<String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title(tr(i18n::current(&app), "pick.dir_title", &[]))
-        .pick_folder(move |p| {
-            let _ = tx.send(
-                p.and_then(|fp| fp.into_path().ok())
-                    .and_then(|pb| pb.to_str().map(String::from)),
-            );
-        });
-    // 对话框回调在主线程执行；本命令放到阻塞池等待，绝不占用主线程
-    // （同步命令会在主线程 recv，回调永远跑不到 → Finder 打开即卡死）。
-    tauri::async_runtime::spawn_blocking(move || {
-        rx.recv_timeout(std::time::Duration::from_secs(600))
-            .ok()
-            .flatten()
-    })
-    .await
-    .ok()
-    .flatten()
 }
 
 #[tauri::command]
@@ -128,14 +102,14 @@ fn read_pairing_log(app: tauri::AppHandle) -> Vec<String> {
 // 版本信息（设置页左下角展示）
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct ToolVersions {
     node: String,
     pnpm: String,
     dsh: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct VersionInfo {
     /// 客户端版本（Cargo.toml / tauri.conf.json 一致）。
     app: String,
@@ -170,14 +144,20 @@ fn run_capture(
     }
     let mut child = builder
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .ok()?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(st)) => {
+                let mut err = String::new();
+                if let Some(mut e) = child.stderr.take() {
+                    let _ = e.read_to_string(&mut err);
+                }
                 if !st.success() {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[probe] {prog:?} failed (exit {:?}): {err}", st.code());
                     return None;
                 }
                 let mut s = String::new();
@@ -198,13 +178,14 @@ fn run_capture(
 
 /// 系统 PATH 上某命令的版本（Windows 需经 cmd /C 解析 .cmd shim）。
 /// `extra_path`：Unix 下拼入 nvm/pnpm home 等路径，避免 Dock 启动时找不到工具。
+/// 版本探测超时用 8s：Corepack 的 pnpm shim 冷启动可达 2.7~4s，写死 3s 会被误杀成「未安装」。
 #[cfg(not(windows))]
 fn sys_version(cmd: &str, extra_path: Option<&str>) -> Option<String> {
     use std::ffi::OsStr;
     run_capture(
         Path::new(cmd),
         &[OsStr::new("--version")],
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(8),
         extra_path,
     )
 }
@@ -215,7 +196,7 @@ fn sys_version(cmd: &str, _extra_path: Option<&str>) -> Option<String> {
     run_capture(
         Path::new("cmd"),
         &[OsStr::new("/C"), OsStr::new(cmd), OsStr::new("--version")],
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(8),
         None,
     )
 }
@@ -293,12 +274,14 @@ fn npx_cached_dsh_version(app: &tauri::AppHandle) -> Option<String> {
     best.map(|(_, v)| v)
 }
 
-#[tauri::command]
-fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
+/// 完整探测一次版本信息（7 个探测并行），返回 VersionInfo。
+/// 超时放宽到 8s：Corepack 的 pnpm shim 冷启动可达 2.7~4s，3s 会被误杀成「未安装」。
+/// 该函数只做探测不写缓存，供后台线程与启动遥测复用。
+fn probe_versions(app: &tauri::AppHandle) -> VersionInfo {
     use std::ffi::OsStr;
     let app_ver = app.package_info().version.to_string();
     // 内置运行时入口（node 可执行 + dsh 的 bin.js；pnpm 走 pnpm.cjs，均用内置 node 直跑，跨平台安全）
-    let (node_bin, dsh_js, pnpm_cjs) = match service::runtime_root(&app) {
+    let (node_bin, dsh_js, pnpm_cjs) = match service::runtime_root(app) {
         Some(rt) => match service::runtime_entry(&rt) {
             Some((node, dsh)) => {
                 let pnpm = rt
@@ -313,7 +296,7 @@ fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
         },
         None => (None, None, None),
     };
-    let timeout = std::time::Duration::from_secs(3);
+    let timeout = std::time::Duration::from_secs(8);
     // 系统探测：拼入 nvm/pnpm home 等路径（Dock 启动时默认 PATH 极短）
     #[cfg(not(windows))]
     let sys_path = {
@@ -377,12 +360,12 @@ fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
     // 从应用自己的 npx 缓存读 dsh 包版本兜底——该包正是实际拉起服务的那个包。
     let running = running.or_else(|| {
         if service_up {
-            npx_cached_dsh_version(&app)
+            npx_cached_dsh_version(app)
         } else {
             None
         }
     });
-    let miss = tr(i18n::current(&app), "ver.not_installed", &[]).to_string();
+    let miss = tr(i18n::current(app), "ver.not_installed", &[]).to_string();
     VersionInfo {
         app: app_ver,
         runtime: ToolVersions {
@@ -398,6 +381,99 @@ fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
         running,
         service_up,
     }
+}
+
+/// 版本缓存状态：内存里只存「上次完整探测时间」，探测结果落在磁盘
+/// version-cache.json，这样设置窗口每次打开都能秒回最近一次结果，
+/// 之后由后台线程异步重新探测并 emit 刷新（不阻塞窗口）。
+pub struct VersionCache {
+    pub last_probe: Option<std::time::Instant>,
+}
+
+impl VersionCache {
+    pub fn new() -> Self {
+        Self { last_probe: None }
+    }
+}
+
+impl Default for VersionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 版本缓存文件路径（files_dir/version-cache.json）。
+fn version_cache_path(app: &tauri::AppHandle) -> PathBuf {
+    service::files_dir(app).join("version-cache.json")
+}
+
+/// 读磁盘缓存（首次冷启动 / 文件缺失返回 None）。
+fn load_version_cache(app: &tauri::AppHandle) -> Option<VersionInfo> {
+    let path = version_cache_path(app);
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 写磁盘缓存。
+fn save_version_cache(app: &tauri::AppHandle, vi: &VersionInfo) {
+    let path = version_cache_path(app);
+    if let Ok(text) = serde_json::to_string_pretty(vi) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// 距上次完整探测超过该时长才重新探测（设置窗口高频开关时避免反复跑慢探测）。
+const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 设置页左下角版本信息：**秒回缓存，不阻塞**。
+/// - 有内存/磁盘缓存 → 立即返回；
+/// - 距上次探测超过 PROBE_INTERVAL（或从未探测）→ 后台线程跑完整探测，
+///   结束后写磁盘缓存、更新内存时间戳并 emit `version-refreshed` 让前端刷新。
+#[tauri::command]
+fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
+    // 优先返回磁盘缓存（秒回）。
+    if let Some(cached) = load_version_cache(&app) {
+        try_probe_async(&app);
+        return cached;
+    }
+    // 无任何缓存：返回占位（app 版本 + 空），后台探测补上真实值。
+    let placeholder = VersionInfo {
+        app: app.package_info().version.to_string(),
+        runtime: ToolVersions {
+            node: "—".into(),
+            pnpm: "—".into(),
+            dsh: "—".into(),
+        },
+        system: ToolVersions {
+            node: "—".into(),
+            pnpm: "—".into(),
+            dsh: "—".into(),
+        },
+        running: None,
+        service_up: service::ServiceManager::is_up(),
+    };
+    try_probe_async(&app);
+    placeholder
+}
+
+/// 若距上次探测超过阈值，spawn 后台线程完整探测（不阻塞命令返回）。
+fn try_probe_async(app: &tauri::AppHandle) {
+    {
+        let state = app.state::<AppState>();
+        let mut cache = state.version_cache.lock().unwrap();
+        if let Some(t) = cache.last_probe {
+            if t.elapsed() < PROBE_INTERVAL {
+                return;
+            }
+        }
+        cache.last_probe = Some(std::time::Instant::now());
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let vi = probe_versions(&handle);
+        let _ = handle.emit("version-refreshed", vi.clone());
+        save_version_cache(&handle, &vi);
+    });
 }
 
 #[tauri::command]
@@ -531,7 +607,6 @@ fn main() {
             // 重复启动时聚焦主窗口。
             crate::tray::show_main_window(app);
         }))
-        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             sm: ServiceManager::new(),
             settings: Mutex::new(Settings::default()),
@@ -539,13 +614,13 @@ fn main() {
             locale: Mutex::new(Locale::default()),
             tray: Mutex::new(None),
             pairing: Mutex::new(Pairing::new()),
+            version_cache: Mutex::new(VersionCache::new()),
         })
         .invoke_handler(tauri::generate_handler![
             query_status,
             has_bundled_runtime,
             get_settings,
             save_settings,
-            pick_dir,
             read_service_log,
             read_pairing_log,
             get_version_info,
@@ -619,10 +694,13 @@ fn main() {
             // 应用更新检测：启动 5 秒后后台检查一次（遵守 24h 间隔）。
             update::startup_check(&handle);
 
-            // 上报增强版启动事件（含环境探测结果）
+            // 上报增强版启动事件（含环境探测结果）。
+            // 启动遥测需要真实一次探测值，且只在应用启动时跑一次（后台线程不阻塞启动）。
             let has_bundled = service::runtime_root(app.handle()).is_some();
             let service_up = service::ServiceManager::is_up();
-            let vi = get_version_info(app.handle().clone());
+            let vi = probe_versions(app.handle());
+            // 启动探测结果直接写缓存：设置窗口首次打开即秒回真实值，无需等后台重探测。
+            save_version_cache(app.handle(), &vi);
             let miss = tr(i18n::current(app.handle()), "ver.not_installed", &[]);
             telemetry::report_app_started(&telemetry::EnvInfo {
                 app_version: app_ver,

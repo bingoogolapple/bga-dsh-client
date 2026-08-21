@@ -119,45 +119,6 @@
         </div>
         <div class="log-view" id="s-log"><div class="log-empty" id="s-log-empty" data-i18n="svc.log.empty">暂无日志：服务尚未启动，或日志文件不存在。</div></div>
 
-        <section class="setting-group" id="method-section">
-          <div class="method-head">
-            <h2 data-i18n="gen.method">服务拉起方式</h2>
-            <p class="hint" data-i18n="gen.method.hint">选择应用启动（或托盘「启动服务 / 重启服务」）时如何拉起 DSH 服务。</p>
-          </div>
-          <p class="hint hidden" id="method-note-builtin" data-i18n="gen.method.builtin_note">内置版：DSH 服务由应用自带的 Node.js 与 dsh 拉起（离线可用），无需配置。</p>
-
-          <div class="method-grid">
-          <label class="option method-card">
-            <input type="radio" name="launch_method" value="npx" />
-            <div>
-              <div class="option-title" data-i18n="gen.method.npx">方式一（默认）· npx 拉起</div>
-              <div class="option-desc"><code>npx --yes @deepseek-ai/dsh web</code> — <span data-i18n="gen.method.npx.desc">无需全局安装，首次运行会自动下载。</span></div>
-            </div>
-          </label>
-
-          <label class="option method-card">
-            <input type="radio" name="launch_method" value="dsh" />
-            <div>
-              <div class="option-title" data-i18n="gen.method.dsh">方式二 · 全局命令拉起</div>
-              <div class="option-desc"><code>dsh web</code> — <span data-i18n="gen.method.dsh.desc">已全局安装过 <code>@deepseek-ai/dsh</code> 时使用。</span></div>
-            </div>
-          </label>
-
-          <label class="option method-card">
-            <input type="radio" name="launch_method" value="pnpm" />
-            <div>
-              <div class="option-title" data-i18n="gen.method.pnpm">方式三 · 指定目录 + pnpm 拉起</div>
-              <div class="option-desc"><code>pnpm dsh web</code> — <span data-i18n="gen.method.pnpm.desc">进入指定目录（DeepSeekHarness 源码目录）后执行。</span></div>
-            </div>
-          </label>
-          </div>
-
-          <div id="pnpm-row" class="pnpm-row hidden">
-            <input id="launch-dir-input" type="text" data-i18n-placeholder="gen.dir.placeholder" placeholder="选择 DeepSeekHarness 源码目录，例如 ~/dsh/deepseek-harness" />
-            <button id="btn-pick" class="ghost" data-i18n="gen.pick_dir">选择目录…</button>
-          </div>
-        </section>
-
         <section class="setting-group">
           <h2 data-i18n="gen.quit">退出行为</h2>
           <label class="option">

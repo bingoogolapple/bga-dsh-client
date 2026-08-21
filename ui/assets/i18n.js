@@ -45,17 +45,6 @@
       "side.client": "客户端",
 
       // 常规设置面板
-      "gen.method": "服务拉起方式",
-      "gen.method.hint": "选择应用启动（或托盘「启动服务 / 重启服务」）时如何拉起 DSH 服务。",
-      "gen.method.builtin_note": "内置版：DSH 服务由应用自带的 Node.js 与 dsh 拉起（离线可用），无需配置。",
-      "gen.method.npx": "方式一（默认）· npx 拉起",
-      "gen.method.npx.desc": "无需全局安装，首次运行会自动下载。",
-      "gen.method.dsh": "方式二 · 全局命令拉起",
-      "gen.method.dsh.desc": "已全局安装过 @deepseek-ai/dsh 时使用。",
-      "gen.method.pnpm": "方式三 · 指定目录 + pnpm 拉起",
-      "gen.method.pnpm.desc": "进入指定目录（DeepSeekHarness 源码目录）后执行。",
-      "gen.dir.placeholder": "选择 DeepSeekHarness 源码目录，例如 ~/dsh/deepseek-harness",
-      "gen.pick_dir": "选择目录…",
       "gen.quit": "退出行为",
       "gen.quit.stop": "退出应用时停止服务",
       "gen.quit.stop.desc": "点击系统托盘「退出应用」时，是否一并停止本应用启动的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。外部已有的服务不受此开关影响。",
@@ -165,17 +154,6 @@
       "side.version_unknown": "Unknown",
       "side.client": "Client",
 
-      "gen.method": "How to launch the service",
-      "gen.method.hint": "Choose how the DSH service is launched when the app starts (or via tray items Start/Restart).",
-      "gen.method.builtin_note": "Bundled build: the DSH service is launched with the included Node.js and dsh (offline-ready); nothing to configure.",
-      "gen.method.npx": "Method 1 (default) · npx",
-      "gen.method.npx.desc": "No global install needed; it downloads automatically on first run.",
-      "gen.method.dsh": "Method 2 · Global command",
-      "gen.method.dsh.desc": "Use when @deepseek-ai/dsh is installed globally.",
-      "gen.method.pnpm": "Method 3 · Directory + pnpm",
-      "gen.method.pnpm.desc": "Runs in the chosen directory (the DeepSeekHarness source dir).",
-      "gen.dir.placeholder": "Choose the DeepSeekHarness source directory, e.g. ~/dsh/deepseek-harness",
-      "gen.pick_dir": "Choose Directory…",
       "gen.quit": "On Quit",
       "gen.quit.stop": "Stop service when quitting",
       "gen.quit.stop.desc": "Whether to also stop the service started by this app when Quit is chosen from the tray. Unchecked by default: after quitting, the service keeps running on 127.0.0.1:3080, is taken over automatically the next time the app opens, and can still be stopped or restarted from the tray. Externally started services are never affected.",
@@ -314,6 +292,4 @@
   })();
 
   window.t = t;
-  window.applyLocale = applyLocale;
-  window.__DSH_LOCALE__ = () => locale;
 })();
