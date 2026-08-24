@@ -175,10 +175,10 @@ fn run_capture(
         std::thread::sleep(std::time::Duration::from_millis(30));
     };
     let out = out_handle.join().unwrap_or_default();
-    let err = err_handle.join().unwrap_or_default();
+    let _err = err_handle.join().unwrap_or_default();
     if !status.success() {
         #[cfg(debug_assertions)]
-        eprintln!("[probe] {prog:?} failed (exit {:?}): {err}", status.code());
+        eprintln!("[probe] {prog:?} failed (exit {:?}): {_err}", status.code());
         return None;
     }
     Some(out.trim().to_string())
