@@ -108,11 +108,7 @@ fn scalar_of_inline(rest: &str) -> Option<String> {
 
 /// 去掉标量首尾引号与行尾注释（` # 注释`）；先剥注释再剥引号。
 fn unquote(raw: &str) -> String {
-    let mut value = raw.trim().to_string();
-    if let Some(idx) = value.find('#') {
-        value = value[..idx].trim().to_string();
-    }
-    let trimmed = value.trim();
+    let trimmed = strip_yaml_comment(raw.trim()).trim();
     if (trimmed.starts_with('"') && trimmed.ends_with('"'))
         || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
     {
@@ -120,6 +116,31 @@ fn unquote(raw: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// 剥离 YAML 行尾注释：`#` 仅当前方是空白或位于行首时才算注释起点；
+/// 引号内的 `#`（如 `"en#x"`）不算注释，避免把值截断。
+fn strip_yaml_comment(s: &str) -> &str {
+    let mut in_quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' | '\'' => {
+                if in_quote == Some(c) {
+                    in_quote = None;
+                } else if in_quote.is_none() {
+                    in_quote = Some(c);
+                }
+            }
+            '#' if in_quote.is_none() => {
+                let prev_ws = i == 0 || s[..i].chars().last().is_some_and(|c| c.is_whitespace());
+                if prev_ws {
+                    return &s[..i];
+                }
+            }
+            _ => {}
+        }
+    }
+    s
 }
 
 /// 解析 settings.json（`{"locale":{"preference":"en"}}`）。

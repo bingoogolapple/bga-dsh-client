@@ -105,6 +105,9 @@ pub struct ServiceManager {
     /// 本应用最近一次启动失败标记（向前端暴露 error 状态，从而展示失败日志）。
     failed: AtomicBool,
     detail: Mutex<String>,
+    /// 服务生命周期操作互斥锁：start/stop/restart 整体串行化，
+    /// 避免快速连续操作并发交错（二次 start 覆盖 child 泄漏进程等竞态）。
+    lifecycle: Mutex<()>,
 }
 
 impl ServiceManager {
@@ -115,6 +118,7 @@ impl ServiceManager {
             starting: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             detail: Mutex::new(String::new()),
+            lifecycle: Mutex::new(()),
         }
     }
 
@@ -209,6 +213,8 @@ impl ServiceManager {
         let h = handle.clone();
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
+            // 生命周期操作串行化：防止快速连续 start/stop/restart 并发交错。
+            let _guard = state.sm.lifecycle.lock().unwrap();
             state.sm.start_inner(&h);
         });
     }
@@ -271,13 +277,8 @@ impl ServiceManager {
         // 先确保 npx 独立缓存目录存在（绕过用户 ~/.npm 的权限/损坏问题）。
         let npm_cache = files_dir(handle).join("npm-cache");
         let _ = std::fs::create_dir_all(&npm_cache);
-        let (shell_cmd, cwd) = build_command(
-            launch_method,
-            runtime.as_deref(),
-            Some(&npm_cache),
-        );
-        let launch_method_display =
-            launch_method.display(crate::i18n::current(handle));
+        let (shell_cmd, cwd) = build_command(launch_method, runtime.as_deref(), Some(&npm_cache));
+        let launch_method_display = launch_method.display(crate::i18n::current(handle));
         let log_path = files_dir(handle).join("service.log");
 
         let child = match spawn_shell(&shell_cmd, cwd.as_deref(), &log_path) {
@@ -387,7 +388,14 @@ impl ServiceManager {
                             if let Some(real) = port_listener_pid() {
                                 *sm.orphan.lock().unwrap() = Some(real);
                                 sm.write_pid(&h, real);
-                                sm.set_detail(&h, tr(crate::i18n::current(&h), "svc.orphan_release", &[&real.to_string()]));
+                                sm.set_detail(
+                                    &h,
+                                    tr(
+                                        crate::i18n::current(&h),
+                                        "svc.orphan_release",
+                                        &[&real.to_string()],
+                                    ),
+                                );
                                 sm.emit_status(&h);
                                 return;
                             }
@@ -414,6 +422,7 @@ impl ServiceManager {
         let h = handle.clone();
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
+            let _guard = state.sm.lifecycle.lock().unwrap();
             state.sm.stop_inner(&h);
         });
     }
@@ -472,6 +481,8 @@ impl ServiceManager {
         let h = handle.clone();
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
+            // 同一把锁内串行 stop→start，避免中间态被并发操作打断。
+            let _guard = state.sm.lifecycle.lock().unwrap();
             state.sm.stop_inner(&h);
             state.sm.start_inner(&h);
         });
@@ -572,6 +583,16 @@ pub fn start_heartbeat(handle: &AppHandle) {
                 continue; // 本应用启动的进程由 exit watcher 管理
             }
             let up = ServiceManager::is_up();
+            // 放生/接管的孤儿服务已退出（进程死或端口已释放）时清理孤儿 PID 记录，
+            // 避免前端一直显示「本应用管理 + 陈旧 PID」，也避免下次启动被误判为接管。
+            let orphan_gone = match *sm.orphan.lock().unwrap() {
+                Some(pid) => !up || !process_alive(pid),
+                None => false,
+            };
+            if orphan_gone {
+                *sm.orphan.lock().unwrap() = None;
+                sm.clear_pid(&h);
+            }
             if last_up != Some(up) {
                 last_up = Some(up);
                 sm.emit_status(&h);
@@ -732,9 +753,12 @@ pub(crate) fn read_tail(path: &Path, limit: usize) -> Vec<String> {
             text = rest.into();
         }
     }
+    if limit == 0 {
+        return Vec::new();
+    }
     text.lines()
         .rev()
-        .take(limit.max(1))
+        .take(limit)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -831,7 +855,11 @@ fn build_command(
             LaunchMethod::Npx => (format!("{npm_prefix}{npx_dsh}"), None),
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => (
-                    format!("\"{}\" \"{}\" web --no-open", node.display(), bin_js.display()),
+                    format!(
+                        "\"{}\" \"{}\" web --no-open",
+                        node.display(),
+                        bin_js.display()
+                    ),
                     None,
                 ),
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
@@ -885,10 +913,7 @@ fn build_command(
                     )
                 }
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => (
-                    format!("{path_prefix}{npm_prefix}{npx_dsh}"),
-                    None,
-                ),
+                None => (format!("{path_prefix}{npm_prefix}{npx_dsh}"), None),
             },
         }
     }
@@ -993,12 +1018,7 @@ fn kill_group(pid: u32) {
 #[cfg(unix)]
 fn port_listener_pid() -> Option<u32> {
     let out = Command::new("lsof")
-        .args([
-            "-nP",
-            "-iTCP:3080",
-            "-sTCP:LISTEN",
-            "-t",
-        ])
+        .args(["-nP", "-iTCP:3080", "-sTCP:LISTEN", "-t"])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1007,16 +1027,11 @@ fn port_listener_pid() -> Option<u32> {
 
 #[cfg(windows)]
 fn port_listener_pid() -> Option<u32> {
-    let out = Command::new("netstat")
-        .args(["-ano"])
-        .output()
-        .ok()?;
+    let out = Command::new("netstat").args(["-ano"]).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     // 行形如 "  TCP   127.0.0.1:3080   0.0.0.0:0   LISTENING   12345"
     text.lines()
-        .find(|l| {
-            l.contains(":3080") && l.contains("LISTENING")
-        })
+        .find(|l| l.contains(":3080") && l.contains("LISTENING"))
         .and_then(|l| l.split_whitespace().last()?.parse::<u32>().ok())
 }
 

@@ -34,7 +34,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
@@ -103,6 +103,9 @@ pub struct Pairing {
     qr_svg: String,
     /// 停止信号（serve 任务轮询）。
     stop: Arc<AtomicBool>,
+    /// 上一次 serve 任务的退出信号接收端：任务结束（含错误退出）时 drop 对应 Sender，
+    /// 此后 recv 返回 Err。重绑端口前先收它，避免旧监听尚未释放导致端口漂移。
+    done: Option<std::sync::mpsc::Receiver<()>>,
     /// 已配对浏览器会话：令牌 → 会话信息。配对成功即签发 Cookie，身份跟着
     /// 浏览器走、不跟着 IP 走——局域网与内网穿透隧道（localhost.run 等）行为一致，
     /// 隧道里每台设备各自配对，互不影响。
@@ -111,8 +114,8 @@ pub struct Pairing {
 
 /// 一个已配对浏览器会话。
 pub struct Session {
-    /// 过期时间。
-    expires: Instant,
+    /// 过期时间（墙钟：`Instant` 在系统休眠期间不计时，作为 TTL 会被无限拉长）。
+    expires: SystemTime,
     /// 配对时的来源 IP（**仅展示用**，不参与信任判定；经 localhost.run 等
     /// 隧道访问时恒为 127.0.0.1，这正是不能按 IP 信任的原因）。
     peer: IpAddr,
@@ -151,18 +154,24 @@ impl Pairing {
             lan_ip: None,
             qr_svg: String::new(),
             stop: Arc::new(AtomicBool::new(true)),
+            done: None,
             sessions: HashMap::new(),
         }
     }
 }
 
-/// 生成新的 6 位一次性配对码。
+/// 生成新的 6 位一次性配对码（加密随机；随机源故障时回退到时间戳）。
 fn gen_code() -> String {
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        % 1_000_000;
+    let mut buf = [0u8; 4];
+    let n = if getrandom::getrandom(&mut buf).is_ok() {
+        u32::from_le_bytes(buf) % 1_000_000
+    } else {
+        (SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+            % 1_000_000) as u64 as u32
+    };
     format!("{n:06}")
 }
 
@@ -305,6 +314,13 @@ pub fn ensure_started(app: &AppHandle) -> Result<(), String> {
     if p.running {
         return p.error.clone().map_or(Ok(()), Err);
     }
+    // 等上一个 serve 任务退出并释放端口：restart（或 stop→start）里旧实例仍
+    // 在异步收尾时若不等待，bind_free 会跳开旧端口，导致每次重启端口 +1 漂移。
+    if let Some(rx) = p.done.take() {
+        drop(p);
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(3));
+        p = state.pairing.lock().unwrap();
+    }
     // 探测局域网 IP（决定 URL/QR 用什么地址广播）。
     let ip = lan_ipv4().ok_or_else(|| {
         let locale = crate::i18n::current(app);
@@ -356,10 +372,14 @@ pub fn ensure_started(app: &AppHandle) -> Result<(), String> {
         ),
     );
     let stop = p.stop.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    p.done = Some(rx);
     let h = app.clone();
     let upstream = SocketAddr::from((UPSTREAM_IP, UPSTREAM_PORT));
     let client = build_client();
     tauri::async_runtime::spawn(async move {
+        // tx 随任务结束 drop → 等待方的 recv 解除，可确认端口已释放。
+        let _done_tx = tx;
         serve_loop(h, listener, stop, client, upstream).await;
     });
     Ok(())
@@ -488,7 +508,7 @@ async fn handle_request(
             p.sessions.insert(
                 token.clone(),
                 Session {
-                    expires: Instant::now() + PAIR_TTL,
+                    expires: SystemTime::now() + PAIR_TTL,
                     peer,
                 },
             );
@@ -511,11 +531,11 @@ async fn handle_request(
         let session_ok = extract_pair_cookie(req.headers())
             .as_deref()
             .and_then(|t| p.sessions.get(t))
-            .map(|s| s.expires > Instant::now())
+            .map(|s| s.expires > SystemTime::now())
             .unwrap_or(false);
 
         // 顺手清理过期条目（每次访问顺带做，量小）。
-        p.sessions.retain(|_, s| s.expires > Instant::now());
+        p.sessions.retain(|_, s| s.expires > SystemTime::now());
         session_ok
     };
     if !trusted {
@@ -617,12 +637,13 @@ pub fn info(app: &AppHandle) -> Result<PairingInfo, String> {
     let mut sessions: Vec<SessionInfo> = p
         .sessions
         .iter()
-        .filter(|(_, s)| s.expires > Instant::now())
+        .filter(|(_, s)| s.expires > SystemTime::now())
         .map(|(_, s)| SessionInfo {
             ip: s.peer.to_string(),
             minutes_left: s
                 .expires
-                .duration_since(Instant::now())
+                .duration_since(SystemTime::now())
+                .unwrap_or_default()
                 .as_secs()
                 .div_ceil(60),
         })

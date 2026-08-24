@@ -111,8 +111,6 @@ struct ToolVersions {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct VersionInfo {
-    /// 客户端版本（Cargo.toml / tauri.conf.json 一致）。
-    app: String,
     /// 内置运行时包（resources/runtime）内的版本。
     runtime: ToolVersions,
     /// 系统 PATH 上当前生效的版本。
@@ -147,33 +145,43 @@ fn run_capture(
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
+    // 在独立线程主动 drain stdout/stderr：版本命令输出很小，但若某命令在退出前
+    // 输出超过管道缓冲（64KB）会阻塞自身、永不退出，最终只能等超时被误杀。主动读掉即无此死锁。
+    let mut stdout = child.stdout.take()?;
+    let mut stderr = child.stderr.take()?;
+    let out_handle = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stdout.read_to_string(&mut s);
+        s
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr.read_to_string(&mut s);
+        s
+    });
     let start = Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(st)) => {
-                let mut err = String::new();
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_string(&mut err);
-                }
-                if !st.success() {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[probe] {prog:?} failed (exit {:?}): {err}", st.code());
-                    return None;
-                }
-                let mut s = String::new();
-                child.stdout.take()?.read_to_string(&mut s).ok()?;
-                return Some(s.trim().to_string());
-            }
+            Ok(Some(st)) => break st,
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
+                    let _ = child.wait();
                     return None;
                 }
             }
             Err(_) => return None,
         }
         std::thread::sleep(std::time::Duration::from_millis(30));
+    };
+    let out = out_handle.join().unwrap_or_default();
+    let err = err_handle.join().unwrap_or_default();
+    if !status.success() {
+        #[cfg(debug_assertions)]
+        eprintln!("[probe] {prog:?} failed (exit {:?}): {err}", status.code());
+        return None;
     }
+    Some(out.trim().to_string())
 }
 
 /// 系统 PATH 上某命令的版本（Windows 需经 cmd /C 解析 .cmd shim）。
@@ -279,7 +287,6 @@ fn npx_cached_dsh_version(app: &tauri::AppHandle) -> Option<String> {
 /// 该函数只做探测不写缓存，供后台线程与启动遥测复用。
 fn probe_versions(app: &tauri::AppHandle) -> VersionInfo {
     use std::ffi::OsStr;
-    let app_ver = app.package_info().version.to_string();
     // 内置运行时入口（node 可执行 + dsh 的 bin.js；pnpm 走 pnpm.cjs，均用内置 node 直跑，跨平台安全）
     let (node_bin, dsh_js, pnpm_cjs) = match service::runtime_root(app) {
         Some(rt) => match service::runtime_entry(&rt) {
@@ -367,7 +374,6 @@ fn probe_versions(app: &tauri::AppHandle) -> VersionInfo {
     });
     let miss = tr(i18n::current(app), "ver.not_installed", &[]).to_string();
     VersionInfo {
-        app: app_ver,
         runtime: ToolVersions {
             node: r_node.unwrap_or_else(|| miss.clone()),
             pnpm: r_pnpm.unwrap_or_else(|| miss.clone()),
@@ -422,6 +428,28 @@ fn save_version_cache(app: &tauri::AppHandle, vi: &VersionInfo) {
     }
 }
 
+/// 重映射缓存里的「未安装」文案到当前语言。
+/// 探测时「未安装」按当次语言写死进缓存（version-cache.json 跨启动/跨语言复用），
+/// 语言切换或下次以另一语言启动时，读缓存会拿到旧语言文案；这里读时统一归一。
+fn relocalize_miss(mut vi: VersionInfo, app: &tauri::AppHandle) -> VersionInfo {
+    let cur = tr(i18n::current(app), "ver.not_installed", &[]);
+    let zh = tr(i18n::Locale::Zh, "ver.not_installed", &[]);
+    let en = tr(i18n::Locale::En, "ver.not_installed", &[]);
+    for field in [
+        &mut vi.runtime.node,
+        &mut vi.runtime.pnpm,
+        &mut vi.runtime.dsh,
+        &mut vi.system.node,
+        &mut vi.system.pnpm,
+        &mut vi.system.dsh,
+    ] {
+        if field.as_str() == zh.as_str() || field.as_str() == en.as_str() {
+            *field = cur.clone();
+        }
+    }
+    vi
+}
+
 /// 距上次完整探测超过该时长才重新探测（设置窗口高频开关时避免反复跑慢探测）。
 const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -434,11 +462,10 @@ fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
     // 优先返回磁盘缓存（秒回）。
     if let Some(cached) = load_version_cache(&app) {
         try_probe_async(&app);
-        return cached;
+        return relocalize_miss(cached, &app);
     }
     // 无任何缓存：返回占位（app 版本 + 空），后台探测补上真实值。
     let placeholder = VersionInfo {
-        app: app.package_info().version.to_string(),
         runtime: ToolVersions {
             node: "—".into(),
             pnpm: "—".into(),
@@ -694,21 +721,32 @@ fn main() {
             // 应用更新检测：启动 5 秒后后台检查一次（遵守 24h 间隔）。
             update::startup_check(&handle);
 
-            // 上报增强版启动事件（含环境探测结果）。
-            // 启动遥测需要真实一次探测值，且只在应用启动时跑一次（后台线程不阻塞启动）。
+            // 版本探测与启动遥测移到后台线程：probe_versions 并行跑 7 个探测、单次最坏 8s
+            // （pnpm Corepack shim 冷启动可达数秒），同步执行会阻塞 setup、拖慢主窗口首帧。
+            // 先标记「已探测」，避免设置窗口首次打开时 try_probe_async 又重复跑一次完整探测。
+            {
+                let state = app.state::<AppState>();
+                let mut cache = state.version_cache.lock().unwrap();
+                cache.last_probe = Some(std::time::Instant::now());
+            }
             let has_bundled = service::runtime_root(app.handle()).is_some();
             let service_up = service::ServiceManager::is_up();
-            let vi = probe_versions(app.handle());
-            // 启动探测结果直接写缓存：设置窗口首次打开即秒回真实值，无需等后台重探测。
-            save_version_cache(app.handle(), &vi);
-            let miss = tr(i18n::current(app.handle()), "ver.not_installed", &[]);
-            telemetry::report_app_started(&telemetry::EnvInfo {
-                app_version: app_ver,
-                has_bundled_runtime: has_bundled,
-                node_version: Some(vi.runtime.node).filter(|v| v.as_str() != miss.as_str()),
-                pnpm_version: Some(vi.runtime.pnpm).filter(|v| v.as_str() != miss.as_str()),
-                dsh_version: Some(vi.runtime.dsh).filter(|v| v.as_str() != miss.as_str()),
-                service_was_up: service_up,
+            let probe_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let vi = probe_versions(&probe_handle);
+                // 与 try_probe_async 一致：探测完成后广播，使启动期间已打开的
+                // 设置窗口也能刷新（否则它拿到的磁盘缓存可能在本次启动内不再更新）。
+                let _ = probe_handle.emit("version-refreshed", vi.clone());
+                save_version_cache(&probe_handle, &vi);
+                let miss = tr(i18n::current(&probe_handle), "ver.not_installed", &[]);
+                telemetry::report_app_started(&telemetry::EnvInfo {
+                    app_version: app_ver,
+                    has_bundled_runtime: has_bundled,
+                    node_version: Some(vi.runtime.node).filter(|v| v.as_str() != miss.as_str()),
+                    pnpm_version: Some(vi.runtime.pnpm).filter(|v| v.as_str() != miss.as_str()),
+                    dsh_version: Some(vi.runtime.dsh).filter(|v| v.as_str() != miss.as_str()),
+                    service_was_up: service_up,
+                });
             });
 
             Ok(())

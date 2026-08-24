@@ -252,6 +252,6 @@ jobs:
 
             ## 使用 / Usage
 
-            **中文：** 启动后自动探测并拉起 DSH Web 服务（默认 `127.0.0.1:3080`），常驻系统托盘；设置页可配置服务拉起方式、退出时是否停止服务，以及开启局域网扫码配对访问（默认 `0.0.0.0:18080`）。
+            **中文：** 启动后自动探测并拉起 DSH Web 服务（默认 `127.0.0.1:3080`），常驻系统托盘；设置页可配置退出时是否停止服务、检测应用更新，以及开启局域网扫码配对访问（默认 `0.0.0.0:18080`）。
 
-            **English:** On launch the app auto-detects and starts the DSH Web service (default `127.0.0.1:3080`) and lives in the system tray; the settings page lets you choose how the service is launched, whether to stop it on quit, and enables LAN QR-code pairing access (default `0.0.0.0:18080`).
+            **English:** On launch the app auto-detects and starts the DSH Web service (default `127.0.0.1:3080`) and lives in the system tray; the settings page lets you choose whether to stop the service on quit, check for app updates, and enable LAN QR-code pairing access (default `0.0.0.0:18080`).

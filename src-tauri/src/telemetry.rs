@@ -121,7 +121,7 @@ pub fn capture_error(error: &str, error_type: Option<&str>) {
     });
 }
 
-/// 基于 hostname + MAC 地址生成确定性匿名机器 ID。
+/// 基于 hostname + 用户名生成确定性匿名机器 ID（默认哈希器使用固定密钥，跨启动稳定）。
 /// 同一台机器每次启动生成相同的 UUID，不可逆推出原始信息。
 fn machine_id() -> String {
     use std::collections::hash_map::DefaultHasher;
