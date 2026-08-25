@@ -146,9 +146,17 @@ impl ServiceManager {
         } else {
             ServiceState::None
         };
-        // 拉起方式完全自动：内置版（应用自带 runtime）用内置 Node.js，普通版用 npx。
-        // 这里仅用于状态展示，与实际启动命令保持一致。
-        let method = if runtime_root(handle).is_some() {
+        // 拉起方式展示：用户选定版本 > 自动判定（内置/npx）。
+        let pinned = handle
+            .state::<crate::AppState>()
+            .settings
+            .lock()
+            .unwrap()
+            .dsh_version
+            .clone();
+        let method = if let Some(ref ver) = pinned {
+            ver.clone()
+        } else if runtime_root(handle).is_some() {
             LaunchMethod::Builtin.display(crate::i18n::current(handle))
         } else {
             LaunchMethod::Npx.display(crate::i18n::current(handle))
@@ -268,17 +276,75 @@ impl ServiceManager {
         let start_time = Instant::now();
 
         let runtime = runtime_root(handle);
-        // 拉起方式完全自动：内置版（应用自带 runtime）用内置 Node.js，普通版用 npx。
-        let launch_method = if runtime.is_some() {
-            LaunchMethod::Builtin
+
+        // 用户选定版本：直接用 ~/.dsh/dsh-versions/<ver>/node_modules/@deepseek-ai/dsh/lib/bin.js
+        let pinned = handle
+            .state::<crate::AppState>()
+            .settings
+            .lock()
+            .unwrap()
+            .dsh_version
+            .clone();
+        let (shell_cmd, cwd, launch_method_display) = if let Some(ref ver) = pinned {
+            let bin_js = crate::dsh_versions_dir(handle)
+                .join(ver)
+                .join("node_modules")
+                .join("@deepseek-ai")
+                .join("dsh")
+                .join("lib")
+                .join("bin.js");
+            // 也检查 builtin 路径
+            let bin_js = if bin_js.exists() {
+                bin_js
+            } else if let Some(rt) = runtime.as_deref() {
+                let (_, builtin_bin_js) = runtime_entry(rt).unwrap_or_default();
+                // 只有当 builtin 版本匹配时才用
+                if builtin_bin_js.exists()
+                    && crate::builtin_dsh_version(handle).as_deref() == Some(ver.as_str())
+                {
+                    builtin_bin_js
+                } else {
+                    bin_js // 不存在，后续 spawn_shell 会报错
+                }
+            } else {
+                bin_js
+            };
+            let node = runtime.as_deref().and_then(runtime_entry).map(|(n, _)| n);
+            let node_str = node
+                .map(|n| n.display().to_string())
+                .unwrap_or_else(|| "node".into());
+            #[cfg(not(windows))]
+            let cmd = {
+                let path_prefix = shell_path_prefix();
+                format!(
+                    "{path_prefix}exec \"{node}\" \"{bin_js}\" web --no-open",
+                    path_prefix = path_prefix,
+                    node = node_str,
+                    bin_js = bin_js.display()
+                )
+            };
+            #[cfg(windows)]
+            let cmd = format!(
+                "\"{node}\" \"{bin_js}\" web --no-open",
+                node = node_str,
+                bin_js = bin_js.display()
+            );
+            let display = ver.to_string();
+            (cmd, None, display)
         } else {
-            LaunchMethod::Npx
+            // 拉起方式完全自动：内置版（应用自带 runtime）用内置 Node.js，普通版用 npx。
+            let launch_method = if runtime.is_some() {
+                LaunchMethod::Builtin
+            } else {
+                LaunchMethod::Npx
+            };
+            // 先确保 npx 独立缓存目录存在（绕过用户 ~/.npm 的权限/损坏问题）。
+            let npm_cache = files_dir(handle).join("npm-cache");
+            let _ = std::fs::create_dir_all(&npm_cache);
+            let (cmd, cwd) = build_command(launch_method, runtime.as_deref(), Some(&npm_cache));
+            let display = launch_method.display(crate::i18n::current(handle));
+            (cmd, cwd, display)
         };
-        // 先确保 npx 独立缓存目录存在（绕过用户 ~/.npm 的权限/损坏问题）。
-        let npm_cache = files_dir(handle).join("npm-cache");
-        let _ = std::fs::create_dir_all(&npm_cache);
-        let (shell_cmd, cwd) = build_command(launch_method, runtime.as_deref(), Some(&npm_cache));
-        let launch_method_display = launch_method.display(crate::i18n::current(handle));
         let log_path = files_dir(handle).join("service.log");
 
         let child = match spawn_shell(&shell_cmd, cwd.as_deref(), &log_path) {
@@ -816,7 +882,7 @@ pub(crate) fn path_dirs() -> Vec<PathBuf> {
 
 /// 组装显式 PATH 前缀；`extra` 为内置运行时目录（捆绑 node bin + dsh/pnpm 的 .bin）。
 #[cfg(not(windows))]
-fn shell_path_prefix() -> String {
+pub(crate) fn shell_path_prefix() -> String {
     let entries = path_dirs()
         .into_iter()
         .map(|d| d.to_string_lossy().into_owned())
@@ -1068,9 +1134,14 @@ mod tests {
     /// 内置版（Builtin）+ runtime 存在：直接使用捆绑 node 直跑 dsh，而非 npx。
     #[test]
     fn build_command_builtin_uses_runtime_entry() {
-        // 构造一个模拟的 runtime 布局：nd/bin/node + rt/node_modules/@deepseek-ai/dsh/lib/bin.js
+        // 构造一个模拟的 runtime 布局：nd/bin/node（类 unix）或 nd/node.exe（win）
+        // + rt/node_modules/@deepseek-ai/dsh/lib/bin.js
         let fake = std::env::temp_dir().join("dsh-fake-runtime-test");
-        let node = fake.join("nd").join("bin").join("node");
+        let node = if cfg!(windows) {
+            fake.join("nd").join("node.exe")
+        } else {
+            fake.join("nd").join("bin").join("node")
+        };
         let bin_js = fake
             .join("rt")
             .join("node_modules")

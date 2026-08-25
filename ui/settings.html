@@ -54,6 +54,12 @@
           </svg>
           <span data-i18n="nav.service">dsh 服务控制</span>
         </button>
+        <button class="nav-item" data-panel="versions">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 2 V6 M8 14 V10 M2 8 H6 M10 8 H14 M3.8 3.8 L5.6 5.6 M10.4 10.4 L12.2 12.2 M12.2 3.8 L10.4 5.6 M5.6 10.4 L3.8 12.2" />
+          </svg>
+          <span data-i18n="nav.versions">dsh 版本管理</span>
+        </button>
         <button class="nav-item" data-panel="lan">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="3.2" cy="3.2" r="1.2" />
@@ -212,6 +218,55 @@
                 <div class="log-view" id="p-log"><div class="log-empty" id="p-log-empty" data-i18n="lan.log.empty">暂无日志：代理服务尚未启动。</div></div>
               </div>
             </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel" id="panel-versions">
+        <h1 class="panel-title" data-i18n="versions.title">dsh 版本管理</h1>
+
+        <section class="setting-group">
+          <h2 data-i18n="versions.registry.title">下载源</h2>
+          <div class="versions-registry-row">
+            <label class="option">
+              <input type="radio" name="npm-registry" value="https://registry.npmjs.org" checked />
+              <span data-i18n="versions.registry.official">npm 官方源</span>
+            </label>
+            <label class="option">
+              <input type="radio" name="npm-registry" value="https://registry.npmmirror.com" />
+              <span data-i18n="versions.registry.mirror">淘宝镜像源</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="setting-group">
+          <div class="versions-current">
+            <span data-i18n="versions.current">当前版本：</span>
+            <span id="dsh-active-ver" class="versions-active-ver"></span>
+            <button id="dsh-clear-ver" class="ghost hidden" data-i18n="versions.clear">恢复默认</button>
+          </div>
+          <div class="versions-note-row">
+            <div id="versions-note" class="versions-note"></div>
+            <button id="dsh-refresh-versions" class="action-btn" data-i18n="versions.refresh">刷新版本列表</button>
+          </div>
+        </section>
+
+        <section class="setting-group">
+          <div id="versions-loading" class="versions-loading hidden">
+            <span class="spinner"></span>
+            <span data-i18n="versions.loading">正在加载版本列表…</span>
+          </div>
+          <div id="versions-table-wrap">
+            <table class="versions-table">
+              <thead>
+                <tr>
+                  <th data-i18n="versions.col.version">版本</th>
+                  <th data-i18n="versions.col.status">状态</th>
+                  <th data-i18n="versions.col.action">操作</th>
+                </tr>
+              </thead>
+              <tbody id="versions-tbody"></tbody>
+            </table>
           </div>
         </section>
       </section>

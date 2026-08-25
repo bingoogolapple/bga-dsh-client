@@ -39,6 +39,68 @@ function toast(msg) {
   el._t = setTimeout(() => el.classList.remove("show"), 2600);
 }
 
+/**
+ * 轻量 DOM 确认弹窗。Tauri v2 已移除 webview 中的原生 window.confirm/alert/prompt，
+ * 直接调用会返回 undefined 导致逻辑被静默跳过（例如删除按钮"点击无反应"）。
+ * 返回一个 Promise<boolean>，点击确认 resolve(true)，取消/关闭 resolve(false)。
+ */
+function confirmDialog(message, opts) {
+  opts = opts || {};
+  const title = opts.title || "请确认";
+  const detail = opts.detail || "";
+  const okText = opts.okText || "确定";
+  const cancelText = opts.cancelText || "取消";
+  return new Promise((resolve) => {
+    let overlay = $("dsh-confirm-overlay");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "dsh-confirm-overlay";
+      overlay.className = "dsh-confirm-overlay hidden";
+      overlay.innerHTML =
+        '<div class="dsh-confirm-box" role="dialog" aria-modal="true">' +
+        '<div class="dsh-confirm-title"></div>' +
+        '<div class="dsh-confirm-msg"></div>' +
+        '<div class="dsh-confirm-detail hidden"></div>' +
+        '<div class="dsh-confirm-actions">' +
+        '<button class="dsh-confirm-cancel" type="button"></button>' +
+        '<button class="dsh-confirm-ok" type="button"></button>' +
+        "</div></div>";
+      document.body.appendChild(overlay);
+    }
+    overlay.querySelector(".dsh-confirm-title").textContent = title;
+    overlay.querySelector(".dsh-confirm-msg").textContent = message;
+    const detailEl = overlay.querySelector(".dsh-confirm-detail");
+    if (detail) {
+      detailEl.textContent = detail;
+      detailEl.classList.remove("hidden");
+    } else {
+      detailEl.classList.add("hidden");
+    }
+    overlay.querySelector(".dsh-confirm-ok").textContent = okText;
+    overlay.querySelector(".dsh-confirm-cancel").textContent = cancelText;
+
+    const okBtn = overlay.querySelector(".dsh-confirm-ok");
+    const cancelBtn = overlay.querySelector(".dsh-confirm-cancel");
+    const close = (val) => {
+      overlay.classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onBackdrop);
+      resolve(val);
+    };
+    const onOk = () => close(true);
+    const onCancel = () => close(false);
+    const onBackdrop = (e) => {
+      if (e.target === overlay) close(false);
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onBackdrop);
+    overlay.classList.remove("hidden");
+    okBtn.focus();
+  });
+}
+
 /* 自定义窗口控制（主窗口与设置窗口共用）：
    关闭 = 收起到托盘/隐藏（不停止服务）；最小化；全屏切换。
    全屏时给 body 加 win-fullscreen，收起圆角与投影（macOS 全屏为直角满屏）。 */

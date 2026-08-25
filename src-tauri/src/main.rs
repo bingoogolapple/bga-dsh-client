@@ -67,9 +67,8 @@ fn get_settings(app: tauri::AppHandle) -> Settings {
 
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, stop_service_on_quit: bool) -> Result<(), String> {
-    let s = Settings {
-        stop_service_on_quit,
-    };
+    let mut current = app.state::<AppState>().settings.lock().unwrap().clone();
+    current.stop_service_on_quit = stop_service_on_quit;
     let path = app
         .state::<AppState>()
         .config_path
@@ -77,8 +76,8 @@ fn save_settings(app: tauri::AppHandle, stop_service_on_quit: bool) -> Result<()
         .unwrap()
         .clone()
         .ok_or_else(|| tr(i18n::current(&app), "set.config_dir_missing", &[]))?;
-    s.save(&path)?;
-    *app.state::<AppState>().settings.lock().unwrap() = s;
+    current.save(&path)?;
+    *app.state::<AppState>().settings.lock().unwrap() = current;
     crate::telemetry::capture_event(
         "settings_saved",
         Some(serde_json::json!({
@@ -213,7 +212,22 @@ fn sys_version(cmd: &str, _extra_path: Option<&str>) -> Option<String> {
 /// 离线 / 超时 / 非本协议响应一律返回 None（前端回退到 PATH / 内置探测）。
 /// 服务端在 host.describe 中自报 @deepseek-ai/dsh 包的版本，因此 npx 拉起的
 /// 服务也能拿到真实运行版本，而不是 PATH 上未必存在的 dsh 探测值。
+/// 重启后服务可能尚未就绪，最多重试 3 次（每次间隔 2 秒），避免立即 fallback
+/// 到 npx 缓存中的旧版本。
 fn running_dsh_version() -> Option<String> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+        if let Some(v) = try_running_dsh_version() {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// 单次 host.describe 探测。
+fn try_running_dsh_version() -> Option<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()
@@ -363,11 +377,27 @@ fn probe_versions(app: &tauri::AppHandle) -> VersionInfo {
         )
     });
     let service_up = service::ServiceManager::is_up();
-    // host.describe 查不到版本（旧版服务返回 0.0.1 占位符 / 探测失败）但服务在线时，
-    // 从应用自己的 npx 缓存读 dsh 包版本兜底——该包正是实际拉起服务的那个包。
+    // 用户显式选定的版本（dsh_version）：下载版/内置版都在 settings 里标记，
+    // 它正是实际拉起的服务版本。
+    let pinned = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .dsh_version
+        .clone();
+    // host.describe 查不到版本（旧版服务返回 0.0.1 占位符 / 探测失败）但服务在线时兜底：
+    // - 用户显式选定了版本（无论内置还是下载版）→ 优先用该版本，它即实际运行版本；
+    //   不能回退到 npx 缓存——npx 缓存是普通版 npx 拉起的包，与用户选定的下载/内置版无关，
+    //   否则会显示切换前的旧 npx 版本（左下角 dsh 版本错乱）。
+    // - 未选定版本（普通版走 npx）→ 才回退到应用自己的 npx 缓存目录读取。
     let running = running.or_else(|| {
         if service_up {
-            npx_cached_dsh_version(app)
+            if let Some(ref pv) = pinned {
+                Some(pv.clone())
+            } else {
+                npx_cached_dsh_version(app)
+            }
         } else {
             None
         }
@@ -461,7 +491,7 @@ const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
     // 优先返回磁盘缓存（秒回）。
     if let Some(cached) = load_version_cache(&app) {
-        try_probe_async(&app);
+        try_probe_async(&app, false);
         return relocalize_miss(cached, &app);
     }
     // 无任何缓存：返回占位（app 版本 + 空），后台探测补上真实值。
@@ -479,18 +509,65 @@ fn get_version_info(app: tauri::AppHandle) -> VersionInfo {
         running: None,
         service_up: service::ServiceManager::is_up(),
     };
-    try_probe_async(&app);
+    try_probe_async(&app, false);
     placeholder
 }
 
-/// 若距上次探测超过阈值，spawn 后台线程完整探测（不阻塞命令返回）。
-fn try_probe_async(app: &tauri::AppHandle) {
+/// 服务重启后强制重新探测版本（绕过30秒冷却期），前端调用后立即刷新左下角版本显示。
+#[tauri::command]
+fn force_refresh_version_info(app: tauri::AppHandle) -> VersionInfo {
+    // 用户显式选定版本（dsh_version）即实际拉起的服务版本——同步给出最可能的运行版本，
+    // 避免 host.describe 探测稍慢/失败时，左下角先显示缓存里切换前的旧版本。
+    let pinned = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .dsh_version
+        .clone();
+    let service_up = service::ServiceManager::is_up();
+    if let Some(mut cached) = load_version_cache(&app) {
+        // 修正 service_up：缓存可能是服务 down 时探测的，现在服务已重启，需实时检测。
+        cached.service_up = service_up;
+        // 选定版本且服务在线时，直接以该版本作为运行版本（探测兜底用，见 probe_versions）。
+        if let Some(ref pv) = pinned {
+            if service_up {
+                cached.running = Some(pv.clone());
+            }
+        } else if !service_up {
+            cached.running = None;
+        }
+        try_probe_async(&app, true);
+        return relocalize_miss(cached, &app);
+    }
+    let placeholder = VersionInfo {
+        runtime: ToolVersions {
+            node: "—".into(),
+            pnpm: "—".into(),
+            dsh: "—".into(),
+        },
+        system: ToolVersions {
+            node: "—".into(),
+            pnpm: "—".into(),
+            dsh: "—".into(),
+        },
+        running: None,
+        service_up: service::ServiceManager::is_up(),
+    };
+    try_probe_async(&app, true);
+    placeholder
+}
+
+/// 若距上次探测超过阈值（或 force=true），spawn 后台线程完整探测（不阻塞命令返回）。
+fn try_probe_async(app: &tauri::AppHandle, force: bool) {
     {
         let state = app.state::<AppState>();
         let mut cache = state.version_cache.lock().unwrap();
-        if let Some(t) = cache.last_probe {
-            if t.elapsed() < PROBE_INTERVAL {
-                return;
+        if !force {
+            if let Some(t) = cache.last_probe {
+                if t.elapsed() < PROBE_INTERVAL {
+                    return;
+                }
             }
         }
         cache.last_probe = Some(std::time::Instant::now());
@@ -501,6 +578,531 @@ fn try_probe_async(app: &tauri::AppHandle) {
         let _ = handle.emit("version-refreshed", vi.clone());
         save_version_cache(&handle, &vi);
     });
+}
+
+// ---------------------------------------------------------------------------
+// DSH 版本管理（设置页「版本管理」面板）
+// ---------------------------------------------------------------------------
+
+/// 语义化版本比较：将 "0.1.10-rc.2" 拆为数字部分逐段比较，pre-release 标签按字典序兜底。
+/// "0.1.10" > "0.1.9"（字典序会误判 "1" < "9"）。
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> (Vec<u64>, String) {
+        let (core, pre) = match s.split_once('-') {
+            Some((c, p)) => (c, p.to_string()),
+            None => (s, String::new()),
+        };
+        let nums: Vec<u64> = core.split('.').filter_map(|x| x.parse().ok()).collect();
+        (nums, pre)
+    };
+    let (a_nums, a_pre) = parse(a);
+    let (b_nums, b_pre) = parse(b);
+    // 逐段比较数字部分
+    let max_len = a_nums.len().max(b_nums.len());
+    for i in 0..max_len {
+        let av = a_nums.get(i).copied().unwrap_or(0);
+        let bv = b_nums.get(i).copied().unwrap_or(0);
+        match av.cmp(&bv) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    // 数字部分相同：无 pre-release 的版本更大（如 1.0.0 > 1.0.0-rc.1）
+    match (a_pre.is_empty(), b_pre.is_empty()) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a_pre.cmp(&b_pre), // 都有或都没有：字典序
+    }
+}
+
+/// `~/.dsh/bga-dsh-client/dsh-versions/` 目录：存放用户手动下载的各版本 dsh。
+/// 与 settings.json 同级（~/.dsh/bga-dsh-client/），便于用户管理和清理。
+pub(crate) fn dsh_versions_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    app.path()
+        .home_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(".dsh")
+        .join("bga-dsh-client")
+        .join("dsh-versions")
+}
+
+/// 远程版本列表缓存路径（files_dir/dsh-versions-cache.json）。
+fn dsh_remote_cache_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+    service::files_dir(app).join("dsh-versions-cache.json")
+}
+
+/// 版本信息条目（前端渲染用）。
+#[derive(serde::Serialize, Clone)]
+struct DshVersionEntry {
+    version: String,
+    local: bool,
+    active: bool,
+    builtin: bool,
+}
+
+/// 读取内置运行时的 dsh 版本（runtime-manifest.json → dshVersion）。
+pub(crate) fn builtin_dsh_version(app: &tauri::AppHandle) -> Option<String> {
+    let rt = service::runtime_root(app)?;
+    let manifest = rt.join("runtime-manifest.json");
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("dshVersion")?.as_str().map(String::from)
+}
+
+/// 读磁盘缓存的远程版本列表。
+fn load_remote_versions_cache(app: &tauri::AppHandle) -> Vec<String> {
+    let path = dsh_remote_cache_path(app);
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// 写磁盘缓存的远程版本列表。
+fn save_remote_versions_cache(app: &tauri::AppHandle, versions: &[String]) {
+    let path = dsh_remote_cache_path(app);
+    if let Ok(text) = serde_json::to_string_pretty(versions) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// 列出所有版本（本地已下载 + 内置 + 远程缓存），合并去重后返回。
+#[tauri::command]
+fn dsh_list_versions(app: tauri::AppHandle) -> Vec<DshVersionEntry> {
+    let versions_dir = dsh_versions_dir(&app);
+    let active = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .dsh_version
+        .clone();
+    let builtin = builtin_dsh_version(&app);
+
+    let mut map: std::collections::HashMap<String, DshVersionEntry> =
+        std::collections::HashMap::new();
+
+    // 1. 本地已下载
+    if let Ok(entries) = std::fs::read_dir(&versions_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let ver = entry.file_name().to_string_lossy().to_string();
+            let bin_js = entry
+                .path()
+                .join("node_modules")
+                .join("@deepseek-ai")
+                .join("dsh")
+                .join("lib")
+                .join("bin.js");
+            if bin_js.exists() {
+                let active_flag = active.as_deref() == Some(ver.as_str());
+                let builtin_flag = builtin.as_deref() == Some(ver.as_str());
+                map.insert(
+                    ver.clone(),
+                    DshVersionEntry {
+                        version: ver,
+                        local: true,
+                        active: active_flag,
+                        builtin: builtin_flag,
+                    },
+                );
+            }
+        }
+    }
+
+    // 2. 内置版本（可能不在 dsh-versions 目录里）
+    if let Some(ref bv) = builtin {
+        map.entry(bv.clone()).or_insert_with(|| DshVersionEntry {
+            version: bv.clone(),
+            local: false,
+            active: active.as_deref() == Some(bv.as_str()),
+            builtin: true,
+        });
+    }
+
+    // 3. 远程缓存
+    for rv in load_remote_versions_cache(&app) {
+        map.entry(rv.clone()).or_insert_with(|| DshVersionEntry {
+            version: rv,
+            local: false,
+            active: false,
+            builtin: false,
+        });
+    }
+
+    // 排序：active 优先，然后版本号语义化倒序（0.1.10 > 0.1.9，而非字典序）
+    let mut result: Vec<DshVersionEntry> = map.into_values().collect();
+    result.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then_with(|| compare_versions(&b.version, &a.version))
+    });
+    result
+}
+
+/// 后台拉取远程版本列表（npm registry → 缓存 → 事件通知前端）。
+#[tauri::command]
+fn dsh_refresh_remote_versions(app: tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let result = fetch_remote_versions_blocking(&handle);
+        match result {
+            Ok(list) => {
+                let _ = handle.emit(
+                    "dsh-versions-refreshed",
+                    serde_json::json!({
+                        "ok": true,
+                        "action": "refresh",
+                        "list": list,
+                    }),
+                );
+            }
+            Err(error) => {
+                let _ = handle.emit(
+                    "dsh-versions-refreshed",
+                    serde_json::json!({
+                        "ok": false,
+                        "action": "refresh",
+                        "list": dsh_list_versions(handle.clone()),
+                        "error": error,
+                    }),
+                );
+            }
+        }
+    });
+    Ok(())
+}
+
+/// 远程版本缓存过期时间（1小时）。
+const REMOTE_CACHE_TTL_SECS: u64 = 3600;
+
+/// 检查远程版本缓存是否过期，过期则自动后台刷新。
+/// 前端在打开版本管理页面时调用，避免用户手动点击「刷新」。
+#[tauri::command]
+fn dsh_maybe_refresh_remote_versions(app: tauri::AppHandle) -> Result<(), String> {
+    let path = dsh_remote_cache_path(&app);
+    // 缓存文件不存在 → 需要刷新
+    let stale = match std::fs::metadata(&path) {
+        Ok(meta) => match meta.modified() {
+            Ok(mtime) => mtime
+                .elapsed()
+                .map(|d| d.as_secs() > REMOTE_CACHE_TTL_SECS)
+                .unwrap_or(true),
+            Err(_) => true,
+        },
+        Err(_) => true,
+    };
+    if stale {
+        dsh_refresh_remote_versions(app)?;
+    }
+    Ok(())
+}
+
+/// 拉取远程版本 → 写缓存 → 返回合并后的完整列表（在后台线程调用，可阻塞）。
+fn fetch_remote_versions_blocking(app: &tauri::AppHandle) -> Result<Vec<DshVersionEntry>, String> {
+    let registry = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .npm_registry
+        .clone()
+        .unwrap_or_else(|| "https://registry.npmjs.org".into());
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp: serde_json::Value = client
+        .get(format!("{registry}/@deepseek-ai%2Fdsh"))
+        .send()
+        .map_err(|e| format!("网络请求失败: {}", e))?
+        .json()
+        .map_err(|e| format!("解析响应失败: {}", e))?;
+    let versions_map = resp
+        .get("versions")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "无法获取版本列表".to_string())?;
+    let mut versions: Vec<String> = versions_map.keys().cloned().collect();
+    versions.sort_by(|a, b| b.cmp(a));
+    save_remote_versions_cache(app, &versions);
+    Ok(dsh_list_versions(app.clone()))
+}
+
+/// 后台下载指定版本（spawn 线程执行 npm install）。
+#[tauri::command]
+fn dsh_download_version(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    let versions_dir = dsh_versions_dir(&app);
+    let target = versions_dir.join(&version);
+    let bin_js = target
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js");
+    if bin_js.exists() {
+        return Err(format!("版本 {} 已下载", version));
+    }
+    // 目录存在但 bin.js 不存在 → 上次下载失败残留，清理后重新下载
+    if target.exists() {
+        let _ = std::fs::remove_dir_all(&target);
+    }
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+
+    let handle = app.clone();
+    let ver = version.clone();
+    std::thread::spawn(move || {
+        let result = do_download_dsh(&handle, &ver, &target);
+        let stage = match &result {
+            Ok(()) => "done",
+            Err(_) => "error",
+        };
+        let message = result.err().unwrap_or_default();
+        let _ = handle.emit(
+            "dsh-download-progress",
+            serde_json::json!({
+                "version": ver,
+                "stage": stage,
+                "message": message,
+            }),
+        );
+        if stage == "error" {
+            let _ = std::fs::remove_dir_all(&target);
+        }
+    });
+    Ok(())
+}
+
+/// 执行 npm install @deepseek-ai/dsh@<version>（阻塞，在后台线程调用）。
+/// 修复要点：
+/// 1. 注入 `npm_config_cache` 到应用缓存目录（绕开用户 ~/.npm 可能的 root 属主/损坏）
+/// 2. 读取用户选择的 registry（官方源 / 淘宝镜像）
+/// 3. 带 180s 超时 + 管道防死锁，错误消息取 stderr 尾部（非空时）或 stdout 尾部
+fn do_download_dsh(
+    app: &tauri::AppHandle,
+    version: &str,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    let _ = app.emit(
+        "dsh-download-progress",
+        serde_json::json!({
+            "version": version,
+            "stage": "installing",
+            "message": "",
+        }),
+    );
+
+    // 读取用户选择的 npm 下载源（默认官方源）
+    let registry = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .npm_registry
+        .clone()
+        .unwrap_or_else(|| "https://registry.npmjs.org".into());
+
+    // 与服务启动一致：注入独立 npm 缓存目录，绕开用户 ~/.npm / 共享缓存的权限损坏。
+    // 注意：不能用 files_dir/npm-cache（服务启动用的共享缓存，其 _cacache/tmp 可能有
+    // 权限问题导致 EPERM），必须用独立目录确保干净。
+    let cache_dir = service::files_dir(app).join("dsh-download-cache");
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    #[cfg(not(windows))]
+    let cmd = format!(
+        "{path_prefix}npm install --save-exact --registry {registry} @deepseek-ai/dsh@{ver}",
+        path_prefix = service::shell_path_prefix(),
+        registry = registry,
+        ver = version,
+    );
+    #[cfg(windows)]
+    let cmd = format!(
+        "npm install --save-exact --registry {registry} @deepseek-ai/dsh@{ver}",
+        registry = registry,
+        ver = version,
+    );
+
+    // 带超时 + 管道防死锁的 subprocess 执行（与 run_capture 同模式）
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    #[cfg(not(windows))]
+    let mut child = Command::new("sh")
+        .arg("-lc")
+        .arg(&cmd)
+        .current_dir(target)
+        .env("npm_config_cache", &cache_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("npm 进程启动失败: {}", e))?;
+    #[cfg(windows)]
+    let mut child = Command::new("cmd")
+        .arg("/C")
+        .arg(&cmd)
+        .current_dir(target)
+        .env("npm_config_cache", &cache_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("npm 进程启动失败: {}", e))?;
+
+    // 独立线程 drain stdout/stderr，避免大输出（>64KB 管道缓冲）互相阻塞
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let out_handle = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(ref mut so) = stdout {
+            let _ = so.read_to_string(&mut s);
+        }
+        s
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(ref mut se) = stderr {
+            let _ = se.read_to_string(&mut s);
+        }
+        s
+    });
+
+    let timeout = std::time::Duration::from_secs(540);
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("npm install 超时（超过 {} 秒）", timeout.as_secs()));
+                }
+            }
+            Err(e) => return Err(format!("npm 进程异常: {}", e)),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    let out = out_handle.join().unwrap_or_default();
+    let err = err_handle.join().unwrap_or_default();
+
+    if !status.success() {
+        // 取 stderr 尾部作为错误详情；空时取 stdout 尾部（npm 有时把错误写到 stdout）
+        let detail = if !err.trim().is_empty() { err } else { out };
+        let tail: String = detail
+            .lines()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(format!("npm install 失败：\n{}", tail));
+    }
+
+    // 验证安装
+    let bin_js = target
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js");
+    if !bin_js.exists() {
+        return Err("安装验证失败：找不到 bin.js".into());
+    }
+    Ok(())
+}
+
+/// 后台删除已下载版本。
+#[tauri::command]
+fn dsh_delete_version(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    let versions_dir = dsh_versions_dir(&app);
+    let target = versions_dir.join(&version);
+    if !target.exists() {
+        return Err(format!("版本 {} 不存在", version));
+    }
+    // 不允许删除正在使用的版本
+    if app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .dsh_version
+        .as_deref()
+        == Some(&version)
+    {
+        return Err(format!("版本 {} 正在使用，无法删除", version));
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let _ = std::fs::remove_dir_all(&target);
+        let _ = handle.emit(
+            "dsh-versions-refreshed",
+            serde_json::json!({
+                "ok": true,
+                "action": "delete",
+                "list": dsh_list_versions(handle.clone()),
+            }),
+        );
+    });
+    Ok(())
+}
+
+/// 设置用户选定的 DSH 版本（Some 表示指定版本，None 表示恢复默认）。
+#[tauri::command]
+fn dsh_set_active_version(app: tauri::AppHandle, version: Option<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut settings = state.settings.lock().unwrap();
+    settings.dsh_version = version;
+    let path = state
+        .config_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "配置目录不存在".to_string())?;
+    settings.save(&path)?;
+    Ok(())
+}
+
+/// 获取当前选定的 DSH 版本。
+#[tauri::command]
+fn dsh_active_version(app: tauri::AppHandle) -> Option<String> {
+    app.state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .dsh_version
+        .clone()
+}
+
+/// 保存用户选择的 npm 下载源（官方源 / 淘宝镜像）。
+#[tauri::command]
+fn dsh_set_registry(app: tauri::AppHandle, registry: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut settings = state.settings.lock().unwrap();
+    settings.npm_registry = Some(registry);
+    let path = state
+        .config_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "配置目录不存在".to_string())?;
+    settings.save(&path)?;
+    Ok(())
+}
+
+/// 获取当前选择的 npm 下载源（None 时前端显示为默认官方源）。
+#[tauri::command]
+fn dsh_get_registry(app: tauri::AppHandle) -> Option<String> {
+    app.state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .npm_registry
+        .clone()
 }
 
 #[tauri::command]
@@ -669,7 +1271,17 @@ fn main() {
             pairing_stop,
             pairing_restart,
             copy_pairing_url,
-            copy_qr_image
+            copy_qr_image,
+            dsh_list_versions,
+            dsh_refresh_remote_versions,
+            dsh_maybe_refresh_remote_versions,
+            dsh_download_version,
+            dsh_delete_version,
+            dsh_set_active_version,
+            dsh_active_version,
+            dsh_set_registry,
+            dsh_get_registry,
+            force_refresh_version_info
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

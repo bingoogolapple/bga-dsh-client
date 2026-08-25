@@ -79,6 +79,11 @@
       clearInterval(lanTimer);
       lanTimer = null;
     }
+    if (name === "versions") {
+      // 快路径秒回本地缓存，慢路径后台拉 npm registry（事件驱动，不阻塞 UI）
+      dshRefreshVersions();
+      dshSyncRemote();
+    }
   }
 
   navItems.forEach((n) => (n.onclick = () => switchPanel(n.dataset.panel)));
@@ -194,6 +199,11 @@
     hasRuntime = await invoke("has_bundled_runtime");
   } catch (e) {
     /* 命令不可用时按普通版处理 */
+  }
+  // 根据内置版/普通版展示下载说明
+  const noteEl = $("versions-note");
+  if (noteEl) {
+    noteEl.textContent = t("versions.download_note");
   }
 
   // 变更即保存：无需手动点保存按钮
@@ -370,6 +380,282 @@
     toast(t("toast.opencode_open"));
   };
 
+  // ---------- dsh 版本管理面板 ----------
+  const dshVersionsTbody = $("versions-tbody");
+  const dshActiveVer = $("dsh-active-ver");
+  const dshClearVer = $("dsh-clear-ver");
+  const dshRefreshBtn = $("dsh-refresh-versions");
+  const dshLoading = $("versions-loading");
+
+  // npm 下载源选择（radio buttons）
+  const registryRadios = document.querySelectorAll('input[name="npm-registry"]');
+  // 初始化：从后端读取当前选择并同步 radio 状态
+  (async function loadRegistry() {
+    try {
+      const current = await invoke("dsh_get_registry");
+      if (current) {
+        const radio = document.querySelector(`input[name="npm-registry"][value="${current}"]`);
+        if (radio) radio.checked = true;
+      }
+    } catch (e) { /* keep default checked */ }
+  })();
+  // radio 切换时保存到后端
+  registryRadios.forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (radio.checked) {
+        invoke("dsh_set_registry", { registry: radio.value }).catch((e) => toast(String(e)));
+      }
+    });
+  });
+
+  // 渲染版本列表；当前使用版本从列表条目的 active 标记推导（后端已合并 settings.dsh_version）
+  function renderDshVersions(versions) {
+    const list = versions || [];
+    const activeEntry = list.find((v) => v.active);
+    if (activeEntry) {
+      dshActiveVer.textContent = activeEntry.version;
+      dshClearVer.classList.remove("hidden");
+    } else {
+      dshActiveVer.textContent = hasRuntime
+        ? t("versions.default_bundled")
+        : t("versions.default_plain");
+      dshClearVer.classList.add("hidden");
+    }
+    // 恢复默认后的启动方式说明（bundled / npx）已移入「恢复默认」二次确认弹窗
+    // 清空表格
+    dshVersionsTbody.innerHTML = "";
+    if (!list.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 3;
+      td.textContent = t("versions.loading");
+      td.style.textAlign = "center";
+      td.style.opacity = "0.5";
+      tr.appendChild(td);
+      dshVersionsTbody.appendChild(tr);
+      return;
+    }
+    for (const v of list) {
+      const tr = document.createElement("tr");
+      if (v.active) tr.classList.add("versions-row-active");
+      // 版本列
+      const tdVer = document.createElement("td");
+      tdVer.textContent = v.version;
+      tr.appendChild(tdVer);
+      // 状态列
+      const tdStatus = document.createElement("td");
+      const parts = [];
+      if (v.builtin) parts.push(t("versions.status.builtin"));
+      if (v.local) {
+        parts.push(v.active ? t("versions.status.active") : t("versions.status.downloaded"));
+      } else if (!v.builtin) {
+        parts.push(t("versions.status.available"));
+      }
+      tdStatus.textContent = parts.join(" · ");
+      tr.appendChild(tdStatus);
+      // 操作列
+      const tdAction = document.createElement("td");
+      if (v.active) {
+        // 当前使用中：无操作按钮
+      } else if (v.local) {
+        // 已下载但非使用中
+        const useBtn = document.createElement("button");
+        useBtn.className = "ghost";
+        useBtn.textContent = t("versions.action.use");
+        useBtn.onclick = () => dshSetActive(v.version);
+        tdAction.appendChild(useBtn);
+        if (!v.builtin) {
+          const delBtn = document.createElement("button");
+          delBtn.className = "ghost action-danger";
+          delBtn.textContent = t("versions.action.delete");
+          if (deletingVersions.has(v.version)) {
+            delBtn.disabled = true;
+            delBtn.textContent = t("versions.action.deleting");
+          }
+          delBtn.onclick = () => dshDeleteVersion(v.version);
+          tdAction.appendChild(delBtn);
+        }
+      } else {
+        // 可下载
+        const dlBtn = document.createElement("button");
+        dlBtn.className = "ghost";
+        dlBtn.textContent = t("versions.action.download");
+        if (downloadingVersions.has(v.version)) {
+          dlBtn.disabled = true;
+          dlBtn.textContent = t("versions.action.downloading");
+        }
+        dlBtn.onclick = () => dshDownloadVersion(v.version);
+        tdAction.appendChild(dlBtn);
+      }
+      tr.appendChild(tdAction);
+      dshVersionsTbody.appendChild(tr);
+    }
+  }
+
+  // 快路径：本地已下载 + 内置 + 缓存远程列表（秒回，无网络，不卡 UI）
+  async function dshRefreshVersions() {
+    dshLoading.classList.remove("hidden");
+    try {
+      const result = await invoke("dsh_list_versions");
+      renderDshVersions(result);
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      dshLoading.classList.add("hidden");
+    }
+  }
+
+  // 慢路径：缓存过期（>1小时）时后台拉取 npm registry，未过期则跳过。
+  // 完成经 dsh-versions-refreshed 事件更新。
+  function dshSyncRemote() {
+    dshRefreshBtn.disabled = true;
+    invoke("dsh_maybe_refresh_remote_versions")
+      .catch(() => {})
+      .finally(() => {
+        dshRefreshBtn.disabled = false;
+      });
+  }
+
+  // 进行中的下载集合：防止重复点击造成并发竞态（后端也有防重入，前端禁用更友好）
+  const downloadingVersions = new Set();
+
+  async function dshDownloadVersion(version) {
+    if (downloadingVersions.has(version)) return;
+    downloadingVersions.add(version);
+    toast(t("versions.downloading", { 0: version }));
+    try {
+      await invoke("dsh_download_version", { version });
+    } catch (e) {
+      downloadingVersions.delete(version);
+      toast(String(e));
+      dshRefreshVersions();
+    }
+  }
+
+  async function dshSetActive(version) {
+    try {
+      const ok = await confirmDialog(
+        t("versions.set_active_confirm", { 0: version }),
+        {
+          title: t("versions.set_active_title"),
+          okText: t("versions.restart_switch"),
+          cancelText: t("versions.cancel_switch"),
+        },
+      );
+      if (!ok) return;
+      await invoke("dsh_set_active_version", { version });
+      await dshRefreshVersions();
+      // 立即把左下角 dsh 版本同步为刚切换到的版本（后台版本探测可能稍慢/失败，
+      // 避免重启后左下角仍显示切换前的旧版本）。
+      const activeVersion = $("dsh-active-ver").textContent.trim();
+      if (activeVersion) $("v-dsh").textContent = activeVersion;
+      toast(t("versions.restarting"));
+      await invoke("service_restart");
+      // 轮询等待服务真正启动后再探测版本（最多等 15 秒）
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const st = await invoke("query_status");
+          if (st && st.state === "running") break;
+        } catch (_) { /* 忽略，服务尚未就绪 */ }
+      }
+      await invoke("force_refresh_version_info");
+    } catch (e) {
+      toast(String(e));
+    }
+  }
+
+  // 进行中的删除集合：防止 confirm 框连点/重复触发
+  const deletingVersions = new Set();
+
+  async function dshDeleteVersion(version) {
+    if (deletingVersions.has(version)) return;
+    const ok = await confirmDialog(t("versions.confirm_delete", { 0: version }), {
+      title: t("versions.confirm_delete_title"),
+      okText: t("versions.action.delete"),
+      cancelText: t("common.cancel"),
+    });
+    if (!ok) return;
+    deletingVersions.add(version);
+    toast(t("versions.deleting"));
+    // 删除在后台线程执行（node_modules 文件多时耗时较长），结果经
+    // dsh-versions-refreshed（action=delete）事件返回，期间按钮显示「删除中…」
+    try {
+      await invoke("dsh_delete_version", { version });
+    } catch (e) {
+      // 同步快速校验失败（使用中 / 未下载）：直接提示
+      deletingVersions.delete(version);
+      toast(String(e));
+    }
+  }
+
+  dshClearVer.onclick = async () => {
+    const ok = await confirmDialog(t("versions.cleared_confirm"), {
+      title: t("versions.set_active_title"),
+      // 二次确认弹窗中说明恢复默认后的启动方式（内置版 bundled / 普通版 npx）
+      detail: hasRuntime ? t("versions.clear_hint_bundled") : t("versions.clear_hint_plain"),
+      okText: t("versions.restart_switch"),
+      cancelText: t("versions.cancel_switch"),
+    });
+    if (!ok) return;
+    try {
+      await invoke("dsh_set_active_version", { version: null });
+      await dshRefreshVersions();
+      toast(t("versions.restarting"));
+      await invoke("service_restart");
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const st = await invoke("query_status");
+          if (st && st.state === "running") break;
+        } catch (_) {}
+      }
+      await invoke("force_refresh_version_info");
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  // 刷新按钮：先同步渲染本地（秒回），再触发后台远程刷新
+  dshRefreshBtn.onclick = () => {
+    dshRefreshVersions();
+    dshSyncRemote();
+  };
+
+  // 远程刷新 / 删除完成事件（后台线程执行后广播，不冻结 UI）
+  listen("dsh-versions-refreshed", (e) => {
+    const payload = e.payload || {};
+    if (payload.ok) {
+      if (payload.action === "delete") deletingVersions.clear();
+      renderDshVersions(payload.list);
+      if (payload.action === "delete") toast(t("versions.deleted"));
+    } else {
+      // 删除失败也需解除按钮禁用状态，否则该版本按钮将一直卡在「删除中…」
+      deletingVersions.clear();
+      renderDshVersions(payload.list);
+      toast(String(payload.error || ""));
+    }
+    dshRefreshBtn.disabled = false;
+  });
+
+  // 下载进度事件
+  listen("dsh-download-progress", (e) => {
+    const { version, stage, message } = e.payload || {};
+    if (stage === "installing") {
+      // npm 开始安装：按钮已显示「下载中…」，这里给出明确提示
+      toast(t("versions.downloading", { 0: version }));
+      dshRefreshVersions();
+    } else if (stage === "done") {
+      downloadingVersions.delete(version);
+      toast(t("versions.download_done", { 0: version }));
+      dshRefreshVersions();
+    } else if (stage === "error") {
+      downloadingVersions.delete(version);
+      toast(t("versions.download_error", { 0: version, 1: message }));
+      dshRefreshVersions();
+    }
+  });
+
   // ---------- 启动 ----------
   try {
     applyStat(await invoke("query_status"));
@@ -402,5 +688,14 @@
     }
     serviceLog.updateEmpty();
     pairLog.updateEmpty();
+    // 版本管理面板语言切换时重新渲染
+    if (panelEls.get("versions") && panelEls.get("versions").classList.contains("active")) {
+      dshRefreshVersions();
+    }
+    // 更新版本管理说明文案
+    const noteEl2 = $("versions-note");
+    if (noteEl2) {
+      noteEl2.textContent = t("versions.download_note");
+    }
   });
 })();

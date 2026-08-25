@@ -16,6 +16,14 @@ pub struct Settings {
     /// 点击托盘「退出应用」时是否停止本应用启动的服务（默认关闭：退出应用不停止服务）。
     #[serde(default)]
     pub stop_service_on_quit: bool,
+    /// 用户选定的 DSH 版本：Some("0.1.0-rc.8") 表示用户指定用该版本；
+    /// None 表示使用默认逻辑（内置版用 bundled 运行时，普通版用 npx latest）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_version: Option<String>,
+    /// npm 下载源：None → "https://registry.npmjs.org"（默认官方源）。
+    /// 用户可在设置页切换为淘宝镜像源 "https://registry.npmmirror.com"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub npm_registry: Option<String>,
 }
 
 impl Settings {
@@ -54,15 +62,52 @@ mod tests {
         assert!(!s.stop_service_on_quit);
     }
 
-    /// 保存时只序列化退出行为，不再出现已废弃的拉起方式字段。
+    /// 保存时只序列化退出行为与版本选择，不再出现已废弃的拉起方式字段。
     #[test]
     fn serializes_only_quit_behavior() {
         let s = Settings {
             stop_service_on_quit: false,
+            dsh_version: None,
+            npm_registry: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"stop_service_on_quit\""));
         assert!(!json.contains("launch_method"));
         assert!(!json.contains("launch_dir"));
+        // dsh_version=None 时不应出现
+        assert!(!json.contains("dsh_version"));
+        // npm_registry=None 时不应出现
+        assert!(!json.contains("npm_registry"));
+    }
+
+    /// dsh_version 字段序列化与反序列化。
+    #[test]
+    fn dsh_version_roundtrip() {
+        let s = Settings {
+            stop_service_on_quit: true,
+            dsh_version: Some("0.1.0-rc.8".into()),
+            npm_registry: None,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"dsh_version\":\"0.1.0-rc.8\""));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.dsh_version.as_deref(), Some("0.1.0-rc.8"));
+    }
+
+    /// npm_registry 字段序列化与反序列化。
+    #[test]
+    fn npm_registry_roundtrip() {
+        let s = Settings {
+            stop_service_on_quit: false,
+            dsh_version: None,
+            npm_registry: Some("https://registry.npmmirror.com".into()),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("npmmirror"));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.npm_registry.as_deref(),
+            Some("https://registry.npmmirror.com")
+        );
     }
 }
