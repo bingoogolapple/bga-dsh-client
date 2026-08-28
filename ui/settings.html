@@ -135,6 +135,17 @@
             </div>
           </label>
         </section>
+
+        <section class="setting-group">
+          <h2 data-i18n="gen.privacy">隐私</h2>
+          <label class="option">
+            <input id="telemetry-enabled" type="checkbox" />
+            <div>
+              <div class="option-title" data-i18n="gen.privacy.telemetry">匿名使用统计</div>
+              <div class="option-desc" data-i18n="gen.privacy.telemetry.desc">默认关闭。开启后，应用会向作者的自建 Sentry 服务上报崩溃信息与匿名使用事件（如启动、启动/停止服务、配对），用于发现并修复问题。上报内容仅含一个不可逆的匿名机器 ID、应用与工具链版本号，**不含**任何文件内容、聊天记录、API Key 或个人身份信息。可随时关闭，关闭后立即停止上报。</div>
+            </div>
+          </label>
+        </section>
       </section>
 
       <section class="panel" id="panel-lan">

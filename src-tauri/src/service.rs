@@ -134,8 +134,10 @@ impl ServiceManager {
     /// 当前服务信息（供命令与事件共用）。
     pub fn info(&self, handle: &AppHandle) -> ServiceInfo {
         let starting = self.starting.load(Ordering::SeqCst);
-        let child = self.child.lock().unwrap();
-        let orphan = *self.orphan.lock().unwrap();
+        // 用 state::lock：锁中毒时恢复数据继续运行，避免因后台线程 panic 导致
+        // 用户点击任何菜单都崩溃（详见 state 模块文档）。
+        let child = crate::state::lock(&self.child);
+        let orphan = *crate::state::lock(&self.orphan);
         let mine = starting || child.is_some() || orphan.is_some();
         let state = if starting {
             ServiceState::Starting
@@ -147,13 +149,7 @@ impl ServiceManager {
             ServiceState::None
         };
         // 拉起方式展示：用户选定版本 > 自动判定（内置/npx）。
-        let pinned = handle
-            .state::<crate::AppState>()
-            .settings
-            .lock()
-            .unwrap()
-            .dsh_version
-            .clone();
+        let pinned = crate::state::settings(handle).dsh_version.clone();
         let method = if let Some(ref ver) = pinned {
             ver.clone()
         } else if runtime_root(handle).is_some() {
@@ -166,7 +162,7 @@ impl ServiceManager {
             mine,
             pid: child.as_ref().map(|c| c.id()).or(orphan),
             method,
-            detail: self.detail.lock().unwrap().clone(),
+            detail: crate::state::lock(&self.detail).clone(),
         }
     }
 
@@ -181,7 +177,7 @@ impl ServiceManager {
         {
             let _ = writeln!(f, "{line}");
         }
-        *self.detail.lock().unwrap() = text;
+        *crate::state::lock(&self.detail) = text;
     }
 
     fn push_log(&self, handle: &AppHandle, line: String) {
@@ -222,7 +218,7 @@ impl ServiceManager {
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
             // 生命周期操作串行化：防止快速连续 start/stop/restart 并发交错。
-            let _guard = state.sm.lifecycle.lock().unwrap();
+            let _guard = crate::state::lock(&state.sm.lifecycle);
             state.sm.start_inner(&h);
         });
     }
@@ -235,7 +231,7 @@ impl ServiceManager {
             );
             return;
         }
-        if self.child.lock().unwrap().is_some() {
+        if crate::state::lock(&self.child).is_some() {
             self.finish(
                 handle,
                 tr(crate::i18n::current(handle), "svc.already_running", &[]),
@@ -243,7 +239,7 @@ impl ServiceManager {
             return;
         }
         // 上次退出放生的服务仍在运行：接管，继续管理。
-        if let Some(pid) = *self.orphan.lock().unwrap() {
+        if let Some(pid) = *crate::state::lock(&self.orphan) {
             if process_alive(pid) {
                 self.finish(
                     handle,
@@ -255,7 +251,7 @@ impl ServiceManager {
                 );
                 return;
             }
-            *self.orphan.lock().unwrap() = None;
+            *crate::state::lock(&self.orphan) = None;
             self.clear_pid(handle);
         }
         if Self::is_up() {
@@ -278,15 +274,9 @@ impl ServiceManager {
         let runtime = runtime_root(handle);
 
         // 用户选定版本：直接用 ~/.dsh/dsh-versions/<ver>/node_modules/@deepseek-ai/dsh/lib/bin.js
-        let pinned = handle
-            .state::<crate::AppState>()
-            .settings
-            .lock()
-            .unwrap()
-            .dsh_version
-            .clone();
+        let pinned = crate::state::settings(handle).dsh_version.clone();
         let (shell_cmd, cwd, launch_method_display) = if let Some(ref ver) = pinned {
-            let bin_js = crate::dsh_versions_dir(handle)
+            let bin_js = crate::dsh::dsh_versions_dir(handle)
                 .join(ver)
                 .join("node_modules")
                 .join("@deepseek-ai")
@@ -300,7 +290,7 @@ impl ServiceManager {
                 let (_, builtin_bin_js) = runtime_entry(rt).unwrap_or_default();
                 // 只有当 builtin 版本匹配时才用
                 if builtin_bin_js.exists()
-                    && crate::builtin_dsh_version(handle).as_deref() == Some(ver.as_str())
+                    && crate::dsh::builtin_dsh_version(handle).as_deref() == Some(ver.as_str())
                 {
                     builtin_bin_js
                 } else {
@@ -366,14 +356,14 @@ impl ServiceManager {
         let pid = child.id();
         self.push_log(handle, format!("$ {shell_cmd}"));
 
-        *self.child.lock().unwrap() = Some(child);
+        *crate::state::lock(&self.child) = Some(child);
 
         // 等待端口就绪（或进程退出 / 超时）。
         let deadline = Instant::now() + START_TIMEOUT;
         let mut exited = false;
         loop {
             {
-                let mut guard = self.child.lock().unwrap();
+                let mut guard = crate::state::lock(&self.child);
                 if let Some(c) = guard.as_mut() {
                     match c.try_wait() {
                         Ok(Some(_)) => {
@@ -410,7 +400,7 @@ impl ServiceManager {
         } else {
             self.starting.store(false, Ordering::SeqCst);
             self.failed.store(true, Ordering::SeqCst);
-            if let Some(mut c) = self.child.lock().unwrap().take() {
+            if let Some(mut c) = crate::state::lock(&self.child).take() {
                 let _ = c.kill();
                 let _ = c.wait();
             }
@@ -441,7 +431,7 @@ impl ServiceManager {
             {
                 let state = h.state::<AppState>();
                 let sm = &state.sm;
-                let mut guard = sm.child.lock().unwrap();
+                let mut guard = crate::state::lock(&sm.child);
                 if guard.as_ref().map(|c| c.id()) != Some(my_pid) {
                     return; // 已被 stop() 接管清理
                 }
@@ -452,7 +442,7 @@ impl ServiceManager {
                             // dsh 服务仍在线：npx 壳退出了，服务变成孤儿。用端口反查真实
                             // 服务 PID 记入 orphan，本次会话内仍可停止/重启，下次启动走接管分支。
                             if let Some(real) = port_listener_pid() {
-                                *sm.orphan.lock().unwrap() = Some(real);
+                                *crate::state::lock(&sm.orphan) = Some(real);
                                 sm.write_pid(&h, real);
                                 sm.set_detail(
                                     &h,
@@ -488,7 +478,7 @@ impl ServiceManager {
         let h = handle.clone();
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
-            let _guard = state.sm.lifecycle.lock().unwrap();
+            let _guard = crate::state::lock(&state.sm.lifecycle);
             state.sm.stop_inner(&h);
         });
     }
@@ -496,8 +486,8 @@ impl ServiceManager {
     fn stop_inner(&self, handle: &AppHandle) {
         self.starting.store(false, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
-        let mine_child = self.child.lock().unwrap().take();
-        let mine_orphan = self.orphan.lock().unwrap().take();
+        let mine_child = crate::state::lock(&self.child).take();
+        let mine_orphan = crate::state::lock(&self.orphan).take();
         if let Some(mut child) = mine_child {
             self.set_detail(
                 handle,
@@ -505,7 +495,7 @@ impl ServiceManager {
             );
             self.emit_status(handle);
             kill_tree(&mut child);
-            self.wait_port_free(handle);
+            self.wait_port_free();
             self.clear_pid(handle);
             self.finish(handle, tr(crate::i18n::current(handle), "svc.stopped", &[]));
             crate::telemetry::capture_event("service_stopped", None);
@@ -516,7 +506,7 @@ impl ServiceManager {
             );
             self.emit_status(handle);
             kill_group(pid);
-            self.wait_port_free(handle);
+            self.wait_port_free();
             self.clear_pid(handle);
             self.finish(handle, tr(crate::i18n::current(handle), "svc.stopped", &[]));
             crate::telemetry::capture_event("service_stopped", None);
@@ -534,12 +524,11 @@ impl ServiceManager {
     }
 
     /// 停止后等待端口释放，避免紧接着的重启抢占失败。
-    fn wait_port_free(&self, handle: &AppHandle) {
+    fn wait_port_free(&self) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Self::is_up() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(200));
         }
-        let _ = handle;
     }
 
     /// 重启服务（停止本应用启动的进程后再启动）。
@@ -548,7 +537,7 @@ impl ServiceManager {
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
             // 同一把锁内串行 stop→start，避免中间态被并发操作打断。
-            let _guard = state.sm.lifecycle.lock().unwrap();
+            let _guard = crate::state::lock(&state.sm.lifecycle);
             state.sm.stop_inner(&h);
             state.sm.start_inner(&h);
         });
@@ -558,10 +547,10 @@ impl ServiceManager {
     pub fn shutdown(&self, handle: &AppHandle) {
         self.starting.store(false, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        if let Some(mut child) = crate::state::lock(&self.child).take() {
             kill_tree(&mut child);
         }
-        if let Some(pid) = self.orphan.lock().unwrap().take() {
+        if let Some(pid) = crate::state::lock(&self.orphan).take() {
             kill_group(pid);
         }
         self.clear_pid(handle);
@@ -572,7 +561,7 @@ impl ServiceManager {
     pub fn detach(&self) {
         self.starting.store(false, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
-        let _ = self.child.lock().unwrap().take();
+        let _ = crate::state::lock(&self.child).take();
     }
 
     // ---- pid 记录（决定服务是否属于本应用、能否停止/接管） ----
@@ -608,7 +597,7 @@ pub fn auto_boot(handle: &AppHandle) {
         if ServiceManager::is_up() {
             match sm.read_pid(&h).filter(|&pid| process_alive(pid)) {
                 Some(pid) => {
-                    *sm.orphan.lock().unwrap() = Some(pid);
+                    *crate::state::lock(&sm.orphan) = Some(pid);
                     sm.set_detail(
                         &h,
                         tr(
@@ -645,18 +634,18 @@ pub fn start_heartbeat(handle: &AppHandle) {
             std::thread::sleep(Duration::from_secs(2));
             let state = h.state::<AppState>();
             let sm = &state.sm;
-            if sm.child.lock().unwrap().is_some() {
+            if crate::state::lock(&sm.child).is_some() {
                 continue; // 本应用启动的进程由 exit watcher 管理
             }
             let up = ServiceManager::is_up();
             // 放生/接管的孤儿服务已退出（进程死或端口已释放）时清理孤儿 PID 记录，
             // 避免前端一直显示「本应用管理 + 陈旧 PID」，也避免下次启动被误判为接管。
-            let orphan_gone = match *sm.orphan.lock().unwrap() {
+            let orphan_gone = match *crate::state::lock(&sm.orphan) {
                 Some(pid) => !up || !process_alive(pid),
                 None => false,
             };
             if orphan_gone {
-                *sm.orphan.lock().unwrap() = None;
+                *crate::state::lock(&sm.orphan) = None;
                 sm.clear_pid(&h);
             }
             if last_up != Some(up) {
@@ -721,42 +710,19 @@ pub fn start_log_tailer(handle: &AppHandle) {
     });
 }
 
-/// 本地时间戳 `[YYYY-MM-DD HH:MM:SS]` 前缀，供日志行写入与实时事件统一使用
-/// （libc localtime，避免 UTC 与本地时区混淆）。
-#[cfg(unix)]
+/// 本地时间戳 `[YYYY-MM-DD HH:MM:SS]` 前缀，供日志行写入与实时事件统一使用。
+///
+/// 用 `time` crate 的 `OffsetDateTime::now_local()`，替代原先手写的
+/// `libc::localtime_r` / `localtime_s` 双分支 unsafe 实现：
+/// - 去掉 2 处 unsafe（OS 本地时区换算交给成熟库）；
+/// - 抹平 unix / windows 的 API 差异（`localtime_r` vs `localtime_s`），单份实现跨平台；
+/// - 拿不到本地时区（极少数环境）时回退 UTC，绝不 panic——日志时间戳缺失不影响主流程。
 pub(crate) fn now_ts() -> String {
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        format!(
-            "[{:04}-{:02}-{:02} {:02}:{:02}:{:02}]",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min,
-            tm.tm_sec
-        )
-    }
-}
-
-#[cfg(windows)]
-pub(crate) fn now_ts() -> String {
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_s(&mut tm, &t);
-        format!(
-            "[{:04}-{:02}-{:02} {:02}:{:02}:{:02}]",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min,
-            tm.tm_sec
-        )
-    }
+    use time::OffsetDateTime;
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    let (h, m, s) = now.to_hms();
+    let (y, mo, d) = (now.year(), u8::from(now.month()), now.day());
+    format!("[{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02}]")
 }
 
 /// 日志滚动：应用启动时检查，超过 `max` 字节的文件轮转为 `.log.1`（原 `.1` 顺延为 `.2`，

@@ -2,9 +2,11 @@
 //! 101 响应构造、升级后的双向字节流转发。
 
 use super::forward::empty_body;
+use super::http::{bad_gateway_response, service_down_response};
+use super::rewrite::rewrite_loopback;
 use super::*;
 
-use hyper::header::{HeaderMap, HeaderValue};
+use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;

@@ -24,6 +24,10 @@ pub struct Settings {
     /// 用户可在设置页切换为淘宝镜像源 "https://registry.npmmirror.com"。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub npm_registry: Option<String>,
+    /// 是否开启匿名使用统计（Sentry 遥测）。**默认关闭（opt-in）**：
+    /// 用户不主动开启则绝不发送任何遥测数据；旧配置文件没有该字段时也是 false。
+    #[serde(default)]
+    pub telemetry_enabled: bool,
 }
 
 impl Settings {
@@ -69,6 +73,7 @@ mod tests {
             stop_service_on_quit: false,
             dsh_version: None,
             npm_registry: None,
+            telemetry_enabled: false,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"stop_service_on_quit\""));
@@ -87,6 +92,7 @@ mod tests {
             stop_service_on_quit: true,
             dsh_version: Some("0.1.0-rc.8".into()),
             npm_registry: None,
+            telemetry_enabled: false,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"dsh_version\":\"0.1.0-rc.8\""));
@@ -101,6 +107,7 @@ mod tests {
             stop_service_on_quit: false,
             dsh_version: None,
             npm_registry: Some("https://registry.npmmirror.com".into()),
+            telemetry_enabled: false,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("npmmirror"));
@@ -109,5 +116,52 @@ mod tests {
             back.npm_registry.as_deref(),
             Some("https://registry.npmmirror.com")
         );
+    }
+
+    /// 遥测开关：默认关闭（opt-in），旧配置缺字段时也是关闭。
+    #[test]
+    fn telemetry_defaults_to_disabled() {
+        // 缺省字段 → false
+        let s: Settings = serde_json::from_str(r#"{"stop_service_on_quit":false}"#).unwrap();
+        assert!(!s.telemetry_enabled, "缺字段时必须默认关闭");
+
+        // 完全空的旧配置 → false
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!s.telemetry_enabled);
+
+        // 显式开启后能正确往返
+        let s = Settings {
+            stop_service_on_quit: false,
+            dsh_version: None,
+            npm_registry: None,
+            telemetry_enabled: true,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(back.telemetry_enabled);
+    }
+
+    /// 远程下发/手写的未知字段不应导致解析失败（向前兼容）。
+    #[test]
+    fn ignores_unknown_future_fields() {
+        let s: Settings =
+            serde_json::from_str(r#"{"stop_service_on_quit":true,"something_new":42}"#).unwrap();
+        assert!(s.stop_service_on_quit);
+    }
+
+    /// 损坏的配置文件回退默认值，不 panic（Settings::load 的契约）。
+    #[test]
+    fn load_falls_back_to_defaults_on_corrupt_file() {
+        let dir = std::env::temp_dir().join("dsh-settings-corrupt-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ this is not json").unwrap();
+        let s = Settings::load(&path);
+        assert!(!s.stop_service_on_quit);
+        assert!(!s.telemetry_enabled);
+        // 文件不存在也回退默认值
+        let s = Settings::load(&dir.join("nope.json"));
+        assert!(!s.telemetry_enabled);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

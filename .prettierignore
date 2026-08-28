@@ -1,0 +1,21 @@
+# 不格式化：第三方/产物/资源
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/resources/
+src-tauri/icons/
+assets/
+images/
+pnpm-lock.yaml
+
+# scripts/*.mjs 是构建脚本，沿用原有单引号风格、由人工维护；
+# 交给 prettier 会整篇改写引号与换行，产生大量与功能无关的 diff 噪音。
+# （仍受 ESLint 检查，只是不参与自动格式化。）
+scripts/
+
+# Cargo 生成的锁文件（由 cargo 维护，不交给 prettier）
+src-tauri/Cargo.lock
+
+# 大段内联 SVG 的 HTML 交给人工维护（prettier 会重排 SVG path，diff 噪音大）
+ui/index.html

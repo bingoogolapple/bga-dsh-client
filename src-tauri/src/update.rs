@@ -12,9 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
-
-use crate::AppState;
+use tauri::{AppHandle, Emitter};
 
 /// 两次自动检查的最小间隔：24 小时。
 const CHECK_INTERVAL: u64 = 24 * 60 * 60;
@@ -78,12 +76,7 @@ fn now_secs() -> u64 {
 /// 缓存文件路径：与 settings.json 同目录（config_path 的父目录）。
 /// config_path 在 setup 阶段已填充；更新检查均在 setup 之后触发，取不到时回退临时目录。
 fn cache_path(handle: &AppHandle) -> PathBuf {
-    let dir = handle
-        .state::<AppState>()
-        .config_path
-        .lock()
-        .unwrap()
-        .clone();
+    let dir = crate::state::config_path(handle);
     dir.and_then(|p| p.parent().map(|d| d.join("update-cache.json")))
         .unwrap_or_else(|| std::env::temp_dir().join("bga-dsh-client-update-cache.json"))
 }
@@ -105,13 +98,24 @@ fn save_cache(handle: &AppHandle, cache: &UpdateCache) {
     }
 }
 
-/// 版本比较：latest 是否严格大于 current（兼容 v 前缀；解析失败视为无更新）。
-fn version_gt(current: &str, latest: &str) -> bool {
+/// 版本比较：latest 是否严格大于 current（兼容 v 前缀）。
+///
+/// **保守策略**：任一侧解析失败即返回 false（不提示更新）。
+/// 这一点很重要——若 current 是损坏/非标准字符串而 latest 合法，
+/// 宽松比较会判定"有更新"，导致用户被引导去下载一个未必需要的版本；
+/// 反过来"漏报一次更新"的代价远小于"误报"。
+///
+/// 注意这里**不能**直接复用 `version::compare_versions` 的结果：
+/// `compare_versions` 为了排序稳定性，对「一边解析失败」返回 Greater/Less
+/// （让无法解析的版本排到最后）；而更新提示需要的是"双边都必须可信"。
+/// 两者共用 `semver` 的解析规则以保证语义一致，但失败处理策略不同。
+pub(crate) fn version_gt(current: &str, latest: &str) -> bool {
     match (
         semver::Version::parse(current.trim_start_matches('v')),
         semver::Version::parse(latest.trim_start_matches('v')),
     ) {
         (Ok(c), Ok(l)) => l > c,
+        // 任一侧非法 → 保守地认为没有更新
         _ => false,
     }
 }

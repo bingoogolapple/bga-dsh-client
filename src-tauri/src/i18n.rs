@@ -277,23 +277,25 @@ pub fn tr(locale: Locale, key: &str, args: &[&str]) -> String {
 static GLOBAL: Mutex<Option<Locale>> = Mutex::new(None);
 
 /// 读取进程级当前语言（未初始化时回退中文）。
+/// 用 crate::state::lock：锁中毒时恢复数据，避免因后台线程 panic 让
+/// 语言读取变成崩溃点（语言读取散落在日志、错误页、托盘等高频路径）。
 pub fn global() -> Locale {
-    GLOBAL.lock().unwrap().unwrap_or_default()
+    crate::state::lock(&GLOBAL).unwrap_or_default()
 }
 
 /// 读 AppState 中的当前语言。
 pub fn current(app: &AppHandle) -> Locale {
-    *app.state::<AppState>().locale.lock().unwrap()
+    *crate::state::lock(&app.state::<AppState>().locale)
 }
 
 /// 更新进程级语言（setup 初始化、watcher 变更时调用）。
 pub fn store_global(locale: Locale) {
-    *GLOBAL.lock().unwrap() = Some(locale);
+    *crate::state::lock(&GLOBAL) = Some(locale);
 }
 
 /// 更新 AppState 中的当前语言（watcher 与 setup 共用）。
 fn store(app: &AppHandle, locale: Locale) {
-    *app.state::<AppState>().locale.lock().unwrap() = locale;
+    *crate::state::lock(&app.state::<AppState>().locale) = locale;
 }
 
 /// 配置 mtime（供 watcher 比对；文件不存在返回 None）。

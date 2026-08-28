@@ -261,7 +261,7 @@ pub fn open_settings_panel(app: &AppHandle, panel: &str) {
 /// 按当前语言刷新托盘菜单文案与设置窗口标题（语言切换时由 i18n watcher 调用）。
 pub fn apply_locale(app: &AppHandle) {
     let locale = crate::i18n::current(app);
-    if let Some(menu) = app.state::<AppState>().tray.lock().unwrap().clone() {
+    if let Some(menu) = crate::state::lock(&app.state::<AppState>().tray).clone() {
         menu.set_labels(locale);
     }
     if let Some(w) = app.get_webview_window("settings") {
@@ -275,7 +275,7 @@ pub fn apply_locale(app: &AppHandle) {
 /// - 启动中：全部禁用；
 /// - 其余（未运行/已停止/失败）：启动启用，停止/重启禁用。
 pub fn refresh_menu(app: &AppHandle, info: &ServiceInfo) {
-    let menu = app.state::<AppState>().tray.lock().unwrap().clone();
+    let menu = crate::state::lock(&app.state::<AppState>().tray).clone();
     let Some(menu) = menu else {
         return;
     };
@@ -297,5 +297,5 @@ pub fn refresh_menu_now(app: &AppHandle) {
 
 /// 供 service 模块使用：把 TrayMenu 存入 AppState。
 pub fn store_menu(app: &AppHandle, menu: TrayMenu) {
-    *app.state::<AppState>().tray.lock().unwrap() = Some(Arc::new(menu));
+    *crate::state::lock(&app.state::<AppState>().tray) = Some(Arc::new(menu));
 }

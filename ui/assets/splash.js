@@ -18,10 +18,8 @@
   const logs = [];
   let wasRunning = false;
   let errorLogLoaded = false;
-  let lastInfo = null;
 
   function apply(info) {
-    lastInfo = info;
     const running = info.state === "running";
     els.pill.textContent = stateLabel(info.state);
     els.pill.dataset.state = info.state;

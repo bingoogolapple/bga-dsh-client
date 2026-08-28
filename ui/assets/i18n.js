@@ -49,6 +49,11 @@
       "gen.quit.stop": "退出应用时停止服务",
       "gen.quit.stop.desc": "点击系统托盘「退出应用」时，是否一并停止本应用启动的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。外部已有的服务不受此开关影响。",
 
+      // 隐私（匿名使用统计，默认关闭）
+      "gen.privacy": "隐私",
+      "gen.privacy.telemetry": "匿名使用统计",
+      "gen.privacy.telemetry.desc": "默认关闭。开启后，应用会向作者的自建 Sentry 服务上报崩溃信息与匿名使用事件（如启动、启动/停止服务、配对），用于发现并修复问题。上报内容仅含一个不可逆的匿名机器 ID、应用与工具链版本号，不含任何文件内容、聊天记录、API Key 或个人身份信息。可随时关闭，关闭后立即停止上报。",
+
       // 服务控制面板
       "svc.title": "dsh 服务控制",
       "svc.unknown": "未知",
@@ -205,6 +210,10 @@
       "gen.quit": "On Quit",
       "gen.quit.stop": "Stop service when quitting",
       "gen.quit.stop.desc": "Whether to also stop the service started by this app when Quit is chosen from the tray. Unchecked by default: after quitting, the service keeps running on 127.0.0.1:3080, is taken over automatically the next time the app opens, and can still be stopped or restarted from the tray. Externally started services are never affected.",
+
+      "gen.privacy": "Privacy",
+      "gen.privacy.telemetry": "Anonymous usage statistics",
+      "gen.privacy.telemetry.desc": "Off by default. When enabled, the app reports crash information and anonymous usage events (such as app start, service start/stop, and pairing) to the author's self-hosted Sentry instance, to help find and fix issues. Reports contain only an irreversible anonymous machine ID plus app/toolchain version numbers — never file contents, chat history, API keys, or any personally identifiable information. You can turn this off at any time; reporting stops immediately.",
 
       "svc.title": "dsh Service",
       "svc.unknown": "Unknown",

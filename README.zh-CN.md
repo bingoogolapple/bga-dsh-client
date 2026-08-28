@@ -229,7 +229,7 @@ OpenCode Go 包含以下使用额度限制，使用便宜点的模型几乎不�
 ## 作者项目推荐
 
 * 欢迎您使用作者开发的第一个独立开发软件产品 [上帝小助手浏览器扩展/插件开发平台](https://github.com/bingoogolapple/bga-god-assistant-config)
-* 欢迎您使用作者的另一个 DeepSeek Harness 插件 [DSH 工作台插件（bga-dsh-workbench）](https://github.com/bingoogolapple/bga-dsh-workbench)：在 hero 空态页展示个性化横幅与头像、完成回合时撒彩带庆祝，并内置一个可驱动 agent 会话执行、支持 5 段 cron 定时调度的任务看板。
+* 欢迎您使用作者的另一个 DeepSeek Harness 插件 [DSH 工作台插件（bga-dsh-workbench）](https://github.com/bingoogolapple/bga-dsh-workbench)：在 hero 空态页展示个性化横幅与头像、完成回合时撒彩带庆祝，并内置一个可驱动 agent 会话执行、支持 5 段 cron 定时调度的任务看板
 
 ## License
 

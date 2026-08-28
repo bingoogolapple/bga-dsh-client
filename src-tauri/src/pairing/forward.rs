@@ -3,10 +3,16 @@
 
 use super::*;
 
+use super::http::{bad_gateway_response, service_down_response};
 use super::rewrite::{
     inject_html_polyfills, is_framing_header, rewrite_connection_bundle, rewrite_loopback,
     strip_hop_by_hop, strip_pair_cookie,
 };
+
+/// 等待上游返回响应头（首字节）的超时。
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// 200 text/html 注入 polyfill 时允许缓冲的最大响应体。
+const HTML_BODY_MAX: usize = 8 * 1024 * 1024;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::header::{HeaderMap, CONTENT_TYPE};

@@ -171,11 +171,15 @@ jobs:
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
 
-      # shell: bash —— Windows runner 默认 pwsh，本步骤是 bash for 循环
-      - name: 前端脚本语法检查
-        shell: bash
-        run: |
-          for f in ui/assets/*.js; do node --check "$f"; done
+      # 前端质量门禁：ESLint（含 XSS 相关规则）+ Prettier 格式校验。
+      # 原先只有 `node --check`（仅语法校验，查不出未定义变量、死代码、
+      # innerHTML 拼接等问题）。ui/ 虽无打包器，但脚本量已上千行，
+      # 需要真正的 lint 来兜住质量。依赖由「安装依赖」步骤的 pnpm install 提供。
+      - name: 前端代码检查（ESLint）
+        run: pnpm run lint
+
+      - name: 前端格式检查（Prettier）
+        run: pnpm run format:check
 
       # ui/ 是纯静态前端（frontendDist: ../ui），无需单独构建；
       # tauri build 按 runner 宿主架构自动产出对应架构产物。
@@ -184,8 +188,16 @@ jobs:
       # target/release/bundle 输出目录而互相覆盖；bundled 首跑会自动下载 Node 并
       # npm ci 安装 dsh（scripts/bundle-runtime.mjs），产物命名加 -bundled 后缀区分。
       # shell: bash —— build-release.sh 是 bash 脚本（Windows 走 Git Bash）。
+      #
+      # SENTRY_DSN：以环境变量注入，telemetry.rs 用 option_env! 在**编译期**读取。
+      # 未设置时编译出的二进制里遥测模块整体空转（不联网、不链接上报路径），
+      # 因此 fork 本仓库的人默认不会把数据发到作者的 Sentry 项目。
+      # 只有 push tag 的正式发布才注入（secrets 在 fork 的 PR 里不可用，
+      # 正好实现"仅官方发布版带遥测能力"）。
       - name: 构建双版本（plain + bundled）
         shell: bash
+        env:
+          SENTRY_DSN: ${{ github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
         run: ./scripts/build-release.sh two
 
       # ditto 打包 .app 以保留符号链接与执行权限，行为与 zip -r 不同、更稳妥；

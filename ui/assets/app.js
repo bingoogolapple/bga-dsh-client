@@ -1,6 +1,22 @@
 /* Shared helpers for DeepSeekHarness UI (no bundler; window.__TAURI__ is injected by Tauri). */
+/* eslint-disable no-unused-vars -- 本文件是共享工具模块：下列顶层函数/常量由
+   splash.js / settings.js / i18n.js 通过全局作用域调用，在本文件内"只定义未调用"
+   是设计使然。每个符号都已逐个 grep 确认被跨文件引用；新增符号请同步维护
+   eslint.config.mjs 的 crossFileExports 列表。 */
 
 const DSH_URL = "http://127.0.0.1:3080";
+
+/** 确认对话框的静态 DOM 骨架（纯字面量，不含任何外部数据）。
+ *  所有动态文本都在创建后通过 textContent 写入，见 confirmDialog()。 */
+const CONFIRM_DIALOG_HTML =
+  '<div class="dsh-confirm-box" role="dialog" aria-modal="true">' +
+  '<div class="dsh-confirm-title"></div>' +
+  '<div class="dsh-confirm-msg"></div>' +
+  '<div class="dsh-confirm-detail hidden"></div>' +
+  '<div class="dsh-confirm-actions">' +
+  '<button class="dsh-confirm-cancel" type="button"></button>' +
+  '<button class="dsh-confirm-ok" type="button"></button>' +
+  "</div></div>";
 
 const __T = window.__TAURI__;
 
@@ -56,15 +72,9 @@ function confirmDialog(message, opts) {
       overlay = document.createElement("div");
       overlay.id = "dsh-confirm-overlay";
       overlay.className = "dsh-confirm-overlay hidden";
-      overlay.innerHTML =
-        '<div class="dsh-confirm-box" role="dialog" aria-modal="true">' +
-        '<div class="dsh-confirm-title"></div>' +
-        '<div class="dsh-confirm-msg"></div>' +
-        '<div class="dsh-confirm-detail hidden"></div>' +
-        '<div class="dsh-confirm-actions">' +
-        '<button class="dsh-confirm-cancel" type="button"></button>' +
-        '<button class="dsh-confirm-ok" type="button"></button>' +
-        "</div></div>";
+      // 纯静态骨架：单个字面量常量，不含任何变量；下方所有动态内容
+      // （title / message / detail / 按钮文案）均通过 textContent 写入。
+      overlay.innerHTML = CONFIRM_DIALOG_HTML;
       document.body.appendChild(overlay);
     }
     overlay.querySelector(".dsh-confirm-title").textContent = title;

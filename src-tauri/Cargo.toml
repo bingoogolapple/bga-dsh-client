@@ -34,6 +34,10 @@ getrandom = "0.2"
 # 更新检测：GitHub Releases API 请求（rustls 证书校验，不依赖系统 TLS）与版本号比较。
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 semver = "1"
+# 本地时区时间戳（日志行前缀）：替代 libc::localtime_r/localtime_s 的 unsafe 实现。
+# local-offset 在部分多线程环境下需要 unsafe 标注，但对本应用（仅日志格式化、无并发
+# 时区环境变更）安全；std 特性不含网络/alloc 之外的重依赖。
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 
 # libc 在 unix 分支用于 ifaddrs/kill/localtime_r；Windows 分支的 now_ts() 用
 # 线程安全的 localtime_s，同样依赖 libc（注意 Windows 上没有 localtime/localtime_r）。
@@ -44,3 +48,14 @@ libc = "0.2"
 strip = true
 lto = true
 codegen-units = 1
+
+# dev 构建体积优化：target/ 目录在长期开发后会累积到 10GB+，主因是 debuginfo。
+# - 关闭 dev 的调试信息（debug = 0）：macOS 上单个 Tauri dev 构建可从数百 MB 降到数十 MB；
+# - 保留 release 的 strip（已开启）用于产物瘦身。
+# 需要调试时可临时 `cargo build --config 'profile.dev.debug=2'` 覆盖，不必改文件。
+[profile.dev]
+debug = 0
+
+# dev 依赖树（build-dependencies / proc-macro）同样累积体积，统一降优化以加快编译。
+[profile.dev.package."*"]
+opt-level = 1

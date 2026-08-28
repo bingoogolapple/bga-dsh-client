@@ -53,16 +53,27 @@
     // 已配对设备 = 浏览器会话（扫码配对，身份跟着 Cookie 走，局域网/内网穿透通用）。
     // 列表展示配对时的来源 IP 与剩余时间；经 localhost.run 等隧道访问的会话
     // 来源 IP 统一为 127.0.0.1（隧道把外网折叠成本机回环，IP 不具区分度）。
-    const list = (info.sessions || []).map((s) => {
+    // 用 DOM API 构建，不要用 innerHTML 拼模板字符串：s.ip 来自网络侧
+    // （配对会话记录的来源 IP），拼进 HTML 会造成 XSS。即使当前 Rust 侧只写入
+    // 规范化的 IP 字符串，也不该让渲染层成为唯一防线（纵深防御 + CSP 之外的第二道）。
+    const deviceList = $("pair-devices");
+    deviceList.replaceChildren();
+    const sessions = info.sessions || [];
+    if (!sessions.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = t("lan.devices.empty");
+      deviceList.appendChild(li);
+      return;
+    }
+    for (const s of sessions) {
       const loop = s.ip === "127.0.0.1" || s.ip === "::1";
       const ip = loop ? `${s.ip}${t("lan.session.tunnel_suffix")}` : s.ip;
-      const title = loop ? t("lan.session.tunnel_title") : t("lan.session.ip_title");
-      return `<li title="${title}">${t("lan.session.title", { 0: ip, 1: s.minutes_left })}</li>`;
-    });
-    const deviceList = $("pair-devices");
-    deviceList.innerHTML = list.length
-      ? list.join("")
-      : `<li class="empty">${t("lan.devices.empty")}</li>`;
+      const li = document.createElement("li");
+      li.title = loop ? t("lan.session.tunnel_title") : t("lan.session.ip_title");
+      li.textContent = t("lan.session.title", { 0: ip, 1: s.minutes_left });
+      deviceList.appendChild(li);
+    }
   }
 
   function switchPanel(name) {
@@ -214,6 +225,21 @@
 
   $("stop-service-on-quit").checked = cfg.stop_service_on_quit !== false;
   $("stop-service-on-quit").onchange = persist;
+
+  // ---------- 隐私：匿名使用统计（默认关闭，opt-in） ----------
+  // 与"退出行为"分开保存：遥测走独立命令 set_telemetry_enabled，
+  // 因为它除了落盘 settings.json 还要在 Rust 侧即时切换运行期开关。
+  const telemetryBox = $("telemetry-enabled");
+  if (telemetryBox) {
+    telemetryBox.checked = cfg.telemetry_enabled === true;
+    telemetryBox.onchange = () => {
+      invoke("set_telemetry_enabled", { enabled: telemetryBox.checked }).catch((e) => {
+        // 保存失败时把开关拨回原状态，避免 UI 显示与实际行为不一致
+        telemetryBox.checked = !telemetryBox.checked;
+        toast(String(e));
+      });
+    };
+  }
 
   // ---------- 服务控制面板 ----------
   let lastStat = null;
