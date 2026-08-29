@@ -22,8 +22,9 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
   color: var(--ink);
   background: transparent;
 }
@@ -40,7 +41,9 @@ button {
   border-radius: 8px;
   padding: 6px 14px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 button:hover {
@@ -67,7 +70,10 @@ button.ghost {
   font-size: 12px;
   line-height: 1.5;
   border-radius: 6px;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.12s ease;
 }
 
 .log-head .ghost:hover {
@@ -167,7 +173,10 @@ code {
   color: #fff;
   font-size: 12px;
   font-weight: 600;
-  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
 }
 
 #btn-settings svg,
@@ -452,7 +461,9 @@ body.win-fullscreen #app-shell {
   border-radius: 10px;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .nav-item svg {
@@ -552,7 +563,12 @@ body.win-fullscreen #app-shell {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 10px 12px;
-  font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    12px/1.7 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
   color: var(--ink);
   white-space: pre-wrap;
   word-break: break-all;
@@ -699,7 +715,11 @@ body.win-fullscreen #app-shell {
   background: var(--card);
   border: 1.5px solid var(--line);
   color: var(--ink-2);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .action-btn svg {
@@ -801,7 +821,9 @@ body.win-fullscreen #app-shell {
   padding: 14px 16px;
   margin-bottom: 10px;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .option:hover {
@@ -962,7 +984,9 @@ body.win-fullscreen #app-shell {
   border-radius: 999px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
   z-index: 999;
   max-width: 80vw;
 }
@@ -1043,7 +1067,9 @@ body.win-fullscreen #app-shell {
   padding: 7px 16px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .dsh-confirm-actions button:hover {
@@ -1076,7 +1102,10 @@ body.win-fullscreen #app-shell {
   border-radius: 999px;
   color: var(--brand);
   border-color: rgba(77, 107, 254, 0.35);
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.12s ease;
 }
 
 .update-check-btn:hover {
@@ -1373,7 +1402,11 @@ body.win-fullscreen #app-shell {
 .versions-table .ghost,
 .versions-current .ghost {
   margin-right: 6px;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .versions-table .ghost:hover,

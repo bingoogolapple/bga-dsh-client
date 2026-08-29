@@ -1,0 +1,26 @@
+# 统一行尾：所有平台检出均为 LF。
+#
+# # 背景（真实事故）
+# CI 的 Prettier 检查（`pnpm run format:check`）在 macOS / Linux 通过，
+# 却在 Windows 上把被检查的文件全部判为不合规：
+#   [warn] .prettierrc.json
+#   [warn] package.json
+#   [warn] eslint.config.mjs
+# 原因：Windows 上 git 可能按 `core.autocrlf` 把文件检出为 CRLF，
+# 而 `.prettierrc.json` 里 `endOfLine` 为 `"lf"`，于是每个文件都被判为需要改行尾。
+#
+# # 为什么用 .gitattributes
+# `.gitattributes` 的 `eol` 设置**优先级高于** `core.autocrlf`，
+# 因此无论本机/Runner 的 git 怎么配，检出结果都一致为 LF。
+# 这比把 prettier 的 `endOfLine` 改成 `auto` 更彻底——后者只是让 prettier
+# 容忍 CRLF，行尾依然会在不同平台间漂移。
+#
+# `text=auto`：由 git 自动判定文本/二进制，PNG / 图标等二进制不会被误转换。
+
+* text=auto eol=lf
+
+# 明确标记为二进制，双保险（避免任何自动判定误伤）
+*.png binary
+*.icns binary
+*.ico binary
+*.dmg binary

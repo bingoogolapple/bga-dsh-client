@@ -42,8 +42,7 @@
       els.btnStart.classList.toggle("hidden", info.state === "starting");
       els.btnRetry.classList.toggle("hidden", info.state !== "error");
       els.logView.classList.toggle("hidden", info.state !== "error");
-      els.splashStatus.textContent =
-        info.detail || stateLabel(info.state);
+      els.splashStatus.textContent = info.detail || stateLabel(info.state);
       // 进入失败态时若实时日志一条都没收到，直接从日志文件兜底拉取末尾，
       // 保证失败原因一定可见（事件可能早于页面挂监听或已错过）。
       if (info.state === "error" && !errorLogLoaded) {

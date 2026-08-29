@@ -47,17 +47,20 @@
       // 常规设置面板
       "gen.quit": "退出行为",
       "gen.quit.stop": "退出应用时停止服务",
-      "gen.quit.stop.desc": "点击系统托盘「退出应用」时，是否一并停止本应用启动的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。外部已有的服务不受此开关影响。",
+      "gen.quit.stop.desc":
+        "点击系统托盘「退出应用」时，是否一并停止本应用启动的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。外部已有的服务不受此开关影响。",
 
       // 隐私（匿名使用统计，默认关闭）
       "gen.privacy": "隐私",
       "gen.privacy.telemetry": "匿名使用统计",
-      "gen.privacy.telemetry.desc": "默认关闭。开启后，应用会向作者的自建 Sentry 服务上报崩溃信息与匿名使用事件（如启动、启动/停止服务、配对），用于发现并修复问题。上报内容仅含一个不可逆的匿名机器 ID、应用与工具链版本号，不含任何文件内容、聊天记录、API Key 或个人身份信息。可随时关闭，关闭后立即停止上报。",
+      "gen.privacy.telemetry.desc":
+        "默认关闭。开启后，应用会向作者的自建 Sentry 服务上报崩溃信息与匿名使用事件（如启动、启动/停止服务、配对），用于发现并修复问题。上报内容仅含一个不可逆的匿名机器 ID、应用与工具链版本号，不含任何文件内容、聊天记录、API Key 或个人身份信息。可随时关闭，关闭后立即停止上报。",
 
       // 服务控制面板
       "svc.title": "dsh 服务控制",
       "svc.unknown": "未知",
-      "svc.hint": "关闭窗口不会停止服务；本应用启动的服务可由托盘或此处管理。若 3080 上运行的是外部启动的服务，启动/停止/重启均不可用。",
+      "svc.hint":
+        "关闭窗口不会停止服务；本应用启动的服务可由托盘或此处管理。若 3080 上运行的是外部启动的服务，启动/停止/重启均不可用。",
       "svc.start": "启动 dsh 服务",
       "svc.restart": "重启 dsh 服务",
       "svc.stop": "停止 dsh 服务",
@@ -68,12 +71,14 @@
       // 局域网面板
       "lan.title": "局域网代理服务控制",
       "lan.detect": "检测中…",
-      "lan.hint": "手机与电脑连接同一 Wi-Fi，扫码确认一次性配对码后，即可在手机浏览器打开 Harness 界面；本机 Loopback 访问不受影响。配对身份跟随浏览器（Cookie）而非 IP，因此也适用于 localhost.run 等内网穿透隧道——每台设备各自配对，互不影响。",
+      "lan.hint":
+        "手机与电脑连接同一 Wi-Fi，扫码确认一次性配对码后，即可在手机浏览器打开 Harness 界面；本机 Loopback 访问不受影响。配对身份跟随浏览器（Cookie）而非 IP，因此也适用于 localhost.run 等内网穿透隧道——每台设备各自配对，互不影响。",
       "lan.start": "启动局域网代理服务",
       "lan.restart": "重启局域网代理服务",
       "lan.restart.tooltip": "重启局域网代理服务：保留配对码与已配对会话",
       "lan.stop": "停止局域网代理服务",
-      "lan.hint2": "配对成功后配对码立即作废，新设备请用窗口中的新码；已配对浏览器 30 分钟内免确认。",
+      "lan.hint2":
+        "配对成功后配对码立即作废，新设备请用窗口中的新码；已配对浏览器 30 分钟内免确认。",
       "lan.code": "一次性配对码",
       "lan.url": "完整访问地址（含配对码）",
       "lan.regen": "重新生成配对码",
@@ -88,7 +93,8 @@
       "lan.status.running_down": "代理运行中 · dsh 服务未运行",
       "lan.session.title": "{0}（扫码配对，剩余 {1} 分钟）",
       "lan.session.tunnel_suffix": "（隧道/本机）",
-      "lan.session.tunnel_title": "经内网穿透隧道或本机访问，来源 IP 统一为回环地址，无法用于区分设备",
+      "lan.session.tunnel_title":
+        "经内网穿透隧道或本机访问，来源 IP 统一为回环地址，无法用于区分设备",
       "lan.session.ip_title": "该会话配对时的来源 IP",
 
       // 更新
@@ -102,9 +108,11 @@
 
       // 打赏
       "donate.title": "打赏支持作者",
-      "donate.hint": "如果您觉得 DeepSeekHarness 帮助到了您，欢迎支持作者继续创作。最推荐的方式：通过作者的邀请链接订阅 OpenCode Go，您与作者各得 $5 订阅额度，双赢！",
+      "donate.hint":
+        "如果您觉得 DeepSeekHarness 帮助到了您，欢迎支持作者继续创作。最推荐的方式：通过作者的邀请链接订阅 OpenCode Go，您与作者各得 $5 订阅额度，双赢！",
       "donate.block.title": "OpenCode Go · 云端 AI 编程订阅",
-      "donate.block.desc": "基于开源 opencode.ai 的 Coding Plan 订阅服务。通过作者的邀请链接订阅，您和作者各得 $5 订阅额度——您的订阅既是给自己添一份 AI 编程额度，也是对作者最实在的支持。",
+      "donate.block.desc":
+        "基于开源 opencode.ai 的 Coding Plan 订阅服务。通过作者的邀请链接订阅，您和作者各得 $5 订阅额度——您的订阅既是给自己添一份 AI 编程额度，也是对作者最实在的支持。",
       "donate.cta": "通过邀请链接订阅（双方各得 $5）",
       "donate.quota.title": "订阅套餐额度",
       "donate.quota.hours": "5 小时限制",
@@ -114,12 +122,14 @@
       "donate.quota.week.v": "$30 使用额度",
       "donate.quota.month.v": "$60 使用额度",
       "donate.quota.hint": "使用便宜点的模型，几乎不会有 Token 焦虑 ✨",
-      "donate.note": "订阅成功后您立即获得对应额度，作者的额度也随之增加。感谢您的支持，让作者有动力持续维护这个开源项目！",
+      "donate.note":
+        "订阅成功后您立即获得对应额度，作者的额度也随之增加。感谢您的支持，让作者有动力持续维护这个开源项目！",
 
       // dsh 版本管理面板
       "nav.versions": "dsh 版本管理",
       "versions.title": "dsh 版本管理",
-      "versions.hint": "管理本客户端使用的 dsh 版本。选择具体版本后，服务启动将直接使用该版本（不经 npx），不再自动更新。",
+      "versions.hint":
+        "管理本客户端使用的 dsh 版本。选择具体版本后，服务启动将直接使用该版本（不经 npx），不再自动更新。",
       "versions.current": "当前版本：",
       "versions.default_bundled": "默认（使用 bundled 运行时）",
       "versions.default_plain": "默认（使用 npx）",
@@ -209,15 +219,18 @@
 
       "gen.quit": "On Quit",
       "gen.quit.stop": "Stop service when quitting",
-      "gen.quit.stop.desc": "Whether to also stop the service started by this app when Quit is chosen from the tray. Unchecked by default: after quitting, the service keeps running on 127.0.0.1:3080, is taken over automatically the next time the app opens, and can still be stopped or restarted from the tray. Externally started services are never affected.",
+      "gen.quit.stop.desc":
+        "Whether to also stop the service started by this app when Quit is chosen from the tray. Unchecked by default: after quitting, the service keeps running on 127.0.0.1:3080, is taken over automatically the next time the app opens, and can still be stopped or restarted from the tray. Externally started services are never affected.",
 
       "gen.privacy": "Privacy",
       "gen.privacy.telemetry": "Anonymous usage statistics",
-      "gen.privacy.telemetry.desc": "Off by default. When enabled, the app reports crash information and anonymous usage events (such as app start, service start/stop, and pairing) to the author's self-hosted Sentry instance, to help find and fix issues. Reports contain only an irreversible anonymous machine ID plus app/toolchain version numbers — never file contents, chat history, API keys, or any personally identifiable information. You can turn this off at any time; reporting stops immediately.",
+      "gen.privacy.telemetry.desc":
+        "Off by default. When enabled, the app reports crash information and anonymous usage events (such as app start, service start/stop, and pairing) to the author's self-hosted Sentry instance, to help find and fix issues. Reports contain only an irreversible anonymous machine ID plus app/toolchain version numbers — never file contents, chat history, API keys, or any personally identifiable information. You can turn this off at any time; reporting stops immediately.",
 
       "svc.title": "dsh Service",
       "svc.unknown": "Unknown",
-      "svc.hint": "Closing the window does not stop the service; services started by this app can be managed from the tray or here. If the service on port 3080 was started externally, Start/Stop/Restart are all unavailable.",
+      "svc.hint":
+        "Closing the window does not stop the service; services started by this app can be managed from the tray or here. If the service on port 3080 was started externally, Start/Stop/Restart are all unavailable.",
       "svc.start": "Start dsh Service",
       "svc.restart": "Restart dsh Service",
       "svc.stop": "Stop dsh Service",
@@ -227,12 +240,14 @@
 
       "lan.title": "LAN Proxy Service",
       "lan.detect": "Detecting…",
-      "lan.hint": "Connect your phone to the same Wi-Fi, scan the code and confirm the one-time pair code, then open the Harness UI in the phone browser; local loopback access is unaffected. Pairing identity follows the browser (Cookie) rather than IP, so it also works through tunnels like localhost.run — each device pairs independently.",
+      "lan.hint":
+        "Connect your phone to the same Wi-Fi, scan the code and confirm the one-time pair code, then open the Harness UI in the phone browser; local loopback access is unaffected. Pairing identity follows the browser (Cookie) rather than IP, so it also works through tunnels like localhost.run — each device pairs independently.",
       "lan.start": "Start LAN Proxy Service",
       "lan.restart": "Restart LAN Proxy Service",
       "lan.restart.tooltip": "Restart LAN proxy: keeps the pair code and paired sessions",
       "lan.stop": "Stop LAN Proxy Service",
-      "lan.hint2": "The pair code is invalidated immediately after pairing; new devices must use the fresh code in this window. Paired browsers stay trusted for 30 minutes without re-confirmation.",
+      "lan.hint2":
+        "The pair code is invalidated immediately after pairing; new devices must use the fresh code in this window. Paired browsers stay trusted for 30 minutes without re-confirmation.",
       "lan.code": "One-time Pair Code",
       "lan.url": "Full Access URL (with pair code)",
       "lan.regen": "Regenerate Pair Code",
@@ -247,7 +262,8 @@
       "lan.status.running_down": "Proxy Running · dsh Service Not Running",
       "lan.session.title": "{0} (paired by QR, {1} min left)",
       "lan.session.tunnel_suffix": " (tunnel/local)",
-      "lan.session.tunnel_title": "Accessed through a tunnel or locally; source IP is a loopback address and cannot distinguish devices",
+      "lan.session.tunnel_title":
+        "Accessed through a tunnel or locally; source IP is a loopback address and cannot distinguish devices",
       "lan.session.ip_title": "Source IP at pairing time",
 
       "update.checking": "Checking for updates…",
@@ -259,9 +275,11 @@
       "update.latest": "Client up to date (v{0})",
 
       "donate.title": "Support the Author",
-      "donate.hint": "If DeepSeekHarness has helped you, consider supporting the author. Best way: subscribe to OpenCode Go through the author's invite link — you and the author each get $5 in credit. Win-win!",
+      "donate.hint":
+        "If DeepSeekHarness has helped you, consider supporting the author. Best way: subscribe to OpenCode Go through the author's invite link — you and the author each get $5 in credit. Win-win!",
       "donate.block.title": "OpenCode Go · Cloud AI Coding Plan",
-      "donate.block.desc": "A Coding Plan subscription built on the open-source opencode.ai. Subscribe through the author's invite link and you and the author each get $5 in credit — your subscription adds AI coding credit for yourself and is the most practical support for the author.",
+      "donate.block.desc":
+        "A Coding Plan subscription built on the open-source opencode.ai. Subscribe through the author's invite link and you and the author each get $5 in credit — your subscription adds AI coding credit for yourself and is the most practical support for the author.",
       "donate.cta": "Subscribe via Invite Link (Both Get $5)",
       "donate.quota.title": "Plan Quotas",
       "donate.quota.hours": "5-hour limit",
@@ -271,11 +289,13 @@
       "donate.quota.week.v": "$30 credit",
       "donate.quota.month.v": "$60 credit",
       "donate.quota.hint": "With cheaper models you rarely worry about tokens ✨",
-      "donate.note": "You get the quota immediately after subscribing, and the author's quota grows too. Thank you for supporting the continued maintenance of this open-source project!",
+      "donate.note":
+        "You get the quota immediately after subscribing, and the author's quota grows too. Thank you for supporting the continued maintenance of this open-source project!",
 
       "nav.versions": "dsh Versions",
       "versions.title": "dsh Version Manager",
-      "versions.hint": "Manage the dsh version used by this client. After selecting a specific version, the service will use it directly (bypassing npx) and will not auto-update.",
+      "versions.hint":
+        "Manage the dsh version used by this client. After selecting a specific version, the service will use it directly (bypassing npx) and will not auto-update.",
       "versions.current": "Current version:",
       "versions.default_bundled": "Default (bundled runtime)",
       "versions.default_plain": "Default (npx)",
@@ -388,7 +408,7 @@
         .then((l) => setLocale(String(l || "zh")))
         .catch(() => setLocale("zh"));
       __T.event
-        .listen("locale-changed", (e) => setLocale(String((e.payload) || "zh")))
+        .listen("locale-changed", (e) => setLocale(String(e.payload || "zh")))
         .catch(() => {});
     } else {
       setLocale("zh");

@@ -36,10 +36,20 @@ function $(id) {
 
 /** 服务状态徽标文案（随当前语言）。 */
 function stateLabel(s) {
-  const keys = { none: "state.none", starting: "state.starting", running: "state.running", stopped: "state.stopped", error: "state.error" };
+  const keys = {
+    none: "state.none",
+    starting: "state.starting",
+    running: "state.running",
+    stopped: "state.stopped",
+    error: "state.error",
+  };
   const key = keys[s];
   if (key && typeof window.t === "function") return window.t(key);
-  return { none: "未运行", starting: "启动中", running: "运行中", stopped: "已停止", error: "启动失败" }[s] || s;
+  return (
+    { none: "未运行", starting: "启动中", running: "运行中", stopped: "已停止", error: "启动失败" }[
+      s
+    ] || s
+  );
 }
 
 function toast(msg) {

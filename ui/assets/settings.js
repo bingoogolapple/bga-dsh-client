@@ -37,9 +37,7 @@
     // 代理停止：二维码 / 配对码 / 完整访问地址一并清空（旧 URL 可能已失效）
     $("pair-qr").innerHTML = on ? info.qr || "" : "";
     $("pair-code").textContent = on ? info.code || "------" : "";
-    $("pair-addr").textContent = on
-      ? `http://${info.ip}:${info.port}/?pair=${info.code}`
-      : "";
+    $("pair-addr").textContent = on ? `http://${info.ip}:${info.port}/?pair=${info.code}` : "";
     const pill = $("pair-status");
     if (!info.running) {
       pill.textContent = t("lan.status.stopped");
@@ -190,7 +188,7 @@
   $("btn-check-update").onclick = () => {
     renderUpdateStatus({ ...(updateInfo || {}), status: "checking" });
     invoke("check_for_update").catch(() =>
-      renderUpdateStatus({ ...(updateInfo || {}), status: "error" })
+      renderUpdateStatus({ ...(updateInfo || {}), status: "error" }),
     );
   };
 
@@ -357,8 +355,7 @@
     const use = hasRuntime ? v.runtime : v.system;
     $("v-node").textContent = use.node;
     $("v-pnpm").textContent = use.pnpm;
-    $("v-dsh").textContent =
-      v.running ?? (v.service_up ? t("side.version_unknown") : use.dsh);
+    $("v-dsh").textContent = v.running ?? (v.service_up ? t("side.version_unknown") : use.dsh);
     $("v-src").textContent = hasRuntime ? t("side.src_builtin") : t("side.src_system");
   }
   (async () => {
@@ -393,10 +390,10 @@
     lanOnly(() => invoke("copy_pairing_url"), t("toast.url_copied"));
   $("btn-pair-copy-qr").onclick = () =>
     lanOnly(() => invoke("copy_qr_image"), t("toast.qr_copied"));
-  $("btn-pair-regen").onclick = () =>
-    lanOnly(() => invoke("pairing_regen"), t("toast.code_regen"));
+  $("btn-pair-regen").onclick = () => lanOnly(() => invoke("pairing_regen"), t("toast.code_regen"));
   $("btn-pair-stop").onclick = () => runLan(() => invoke("pairing_stop"), t("toast.proxy_stopped"));
-  $("btn-pair-start").onclick = () => runLan(() => invoke("pairing_start"), t("toast.proxy_started"));
+  $("btn-pair-start").onclick = () =>
+    runLan(() => invoke("pairing_start"), t("toast.proxy_started"));
   $("btn-pair-restart").onclick = () =>
     runLan(() => invoke("pairing_restart"), t("toast.proxy_restarted"));
 
@@ -423,7 +420,9 @@
         const radio = document.querySelector(`input[name="npm-registry"][value="${current}"]`);
         if (radio) radio.checked = true;
       }
-    } catch (e) { /* keep default checked */ }
+    } catch (e) {
+      /* keep default checked */
+    }
   })();
   // radio 切换时保存到后端
   registryRadios.forEach((radio) => {
@@ -560,14 +559,11 @@
 
   async function dshSetActive(version) {
     try {
-      const ok = await confirmDialog(
-        t("versions.set_active_confirm", { 0: version }),
-        {
-          title: t("versions.set_active_title"),
-          okText: t("versions.restart_switch"),
-          cancelText: t("versions.cancel_switch"),
-        },
-      );
+      const ok = await confirmDialog(t("versions.set_active_confirm", { 0: version }), {
+        title: t("versions.set_active_title"),
+        okText: t("versions.restart_switch"),
+        cancelText: t("versions.cancel_switch"),
+      });
       if (!ok) return;
       await invoke("dsh_set_active_version", { version });
       await dshRefreshVersions();
@@ -583,7 +579,9 @@
         try {
           const st = await invoke("query_status");
           if (st && st.state === "running") break;
-        } catch (_) { /* 忽略，服务尚未就绪 */ }
+        } catch (_) {
+          /* 忽略，服务尚未就绪 */
+        }
       }
       await invoke("force_refresh_version_info");
     } catch (e) {
