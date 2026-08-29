@@ -130,7 +130,8 @@ bga-dsh-client/
 │   └── set-runtime-version.sh    # batch set the runtime versions
 ├── docs/
 │   ├── Sentry.md                 # telemetry behavior & privacy statement
-│   └── RUNTIME-VERSIONING.md     # bundled runtime versioning conventions
+│   ├── RUNTIME-VERSIONING.md     # bundled runtime versioning conventions
+│   └── RETAG.md                  # how to re-tag after a failed release build
 ├── src-tauri/                    # Rust backend (Tauri core)
 │   ├── Cargo.toml                # Rust dependencies
 │   ├── Cargo.lock                # Rust dependency lock

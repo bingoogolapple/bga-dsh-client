@@ -130,7 +130,8 @@ bga-dsh-client/
 │   └── set-runtime-version.sh    # 批量设置运行时版本号
 ├── docs/
 │   ├── Sentry.md                 # 遥测行为与隐私说明
-│   └── RUNTIME-VERSIONING.md     # 内置运行时版本管理约定
+│   ├── RUNTIME-VERSIONING.md     # 内置运行时版本管理约定
+│   └── RETAG.md                  # 构建失败后重打 tag 的操作步骤
 ├── src-tauri/                    # Rust 后端（Tauri 核心）
 │   ├── Cargo.toml                # Rust 依赖声明
 │   ├── Cargo.lock                # Rust 依赖锁定
