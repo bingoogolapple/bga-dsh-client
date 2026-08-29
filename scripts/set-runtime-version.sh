@@ -68,7 +68,7 @@ apply_node() { # newver
   edit_file scripts/bundle-runtime.mjs          "= '$old'"                  "= '$new'"
   edit_file docs/RUNTIME-VERSIONING.md          "| Node.js | \`$old\` |"   "| Node.js | \`$new\` |"
   edit_file README.md          "badge/node-${old//-/--}-"   "badge/node-${new//-/--}-"
-  edit_file README.zh-CN.md    "badge/node-${old//-/--}-"   "badge/node-${new//-/--}-"
+  edit_file README.en.md        "badge/node-${old//-/--}-"   "badge/node-${new//-/--}-"
   CUR_NODE="$new"
 }
 
@@ -78,7 +78,7 @@ apply_pnpm() {
   edit_file scripts/bundle-runtime.mjs          "= '$old'"                  "= '$new'"
   edit_file docs/RUNTIME-VERSIONING.md          "| pnpm | \`$old\` |"      "| pnpm | \`$new\` |"
   edit_file README.md          "badge/pnpm-${old//-/--}-"   "badge/pnpm-${new//-/--}-"
-  edit_file README.zh-CN.md    "badge/pnpm-${old//-/--}-"   "badge/pnpm-${new//-/--}-"
+  edit_file README.en.md        "badge/pnpm-${old//-/--}-"   "badge/pnpm-${new//-/--}-"
   CUR_PNPM="$new"
 }
 
@@ -88,7 +88,7 @@ apply_dsh() {
   edit_file scripts/bundle-runtime.mjs          "= '$old'"                  "= '$new'"
   edit_file docs/RUNTIME-VERSIONING.md          "| @deepseek-ai/dsh | \`$old\` |"   "| @deepseek-ai/dsh | \`$new\` |"
   edit_file README.md          "badge/dsh-${old//-/--}-"   "badge/dsh-${new//-/--}-"
-  edit_file README.zh-CN.md    "badge/dsh-${old//-/--}-"   "badge/dsh-${new//-/--}-"
+  edit_file README.en.md        "badge/dsh-${old//-/--}-"   "badge/dsh-${new//-/--}-"
   CUR_DSH="$new"
 }
 
@@ -220,4 +220,4 @@ echo "==> 提醒："
 echo "  1. 若 dsh/pnpm 版本变化，请提交新的 src-tauri/resources/runtime/rt/package.json 与 package-lock.json（保证后续 npm ci 秒装）"
 echo "  2. CI 发版前请把改动一起推送；cache key 已随版本自动失效"
 echo "  3. 改动摘要："
-git diff --stat -- scripts/bundle-runtime.mjs docs/RUNTIME-VERSIONING.md README.md README.zh-CN.md
+git diff --stat -- scripts/bundle-runtime.mjs docs/RUNTIME-VERSIONING.md README.md README.en.md
