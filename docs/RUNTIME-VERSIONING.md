@@ -179,7 +179,7 @@ git add src-tauri/resources/runtime/rt/package.json \
 5. 推送 tag 发版：CI 读取新版本 → cache key 自动 miss → 各架构重建新版本运行时并重新缓存。
 
 升级 Node 或 pnpm 同理，只是第 1 步换成检查 nodejs.org / npm 上对应版本
-（node 需确认目标平台包存在，见 §5）。
+（node 需确认目标平台包存在，见 §6）。
 
 ---
 
@@ -194,7 +194,31 @@ git add src-tauri/resources/runtime/rt/package.json \
 
 ---
 
-## 5. 约束与注意事项
+## 5. 与「dsh 版本管理」面板的区别（易混淆）
+
+本文描述的是**内置运行时（bundled 版打包进去的 node / dsh / pnpm）的版本**，由维护者
+在源码里锁定、随应用发版。设置页「dsh 版本管理」面板是**另一套机制**，二者互不影响：
+
+| | 内置运行时版本（本文） | dsh 版本管理面板（`src-tauri/src/dsh.rs`） |
+|---|---|---|
+| 谁在改 | 仓库维护者（改 `bundle-runtime.mjs` 后发版） | 终端用户（在设置页下载/切换） |
+| 版本来源 | 源码常量，构建时打包进应用 | 运行时从 npm registry 下载 |
+| 存放位置 | `src-tauri/resources/runtime/` | `~/.dsh/bga-dsh-client/dsh-versions/<ver>/` |
+| 影响范围 | bundled 版默认启动用的 dsh | 用户选定版本后**覆盖**默认行为（两种构建都可选） |
+
+要点：
+
+- 面板里标着「内置」的那一版就是本文 `DSH_VERSION` 对应的版本（读 `runtime-manifest.json`
+  的 `dshVersion` 得来），它**不可删除**，选中它等价于「恢复默认（bundled 运行时）」。
+- 用户选定其他版本后，服务直接用 `dsh-versions/<ver>/…/bin.js` 启动，**不再使用内置版本**，
+  本文的 dsh 版本也就不再是实际运行版本（左下角版本区显示的是选定版本）。
+- 因此：**改本文的版本不会改变用户已选定的版本，也不会删掉用户已下载的版本**；
+  反之用户切换版本也不会改动内置运行时。
+- 详细说明见 README 的「📦 dsh 版本管理」一节。
+
+---
+
+## 6. 约束与注意事项
 
 - **Node 版本必须存在相应平台包**：脚本按目标平台拼 URL，缺了会下载失败——
   - macOS arm64 / x64：`https://nodejs.org/dist/<ver>/node-<ver>-darwin-{arm64,x64}.tar.gz`

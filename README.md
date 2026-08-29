@@ -24,6 +24,7 @@ A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai
 - **Start / Restart / Stop** the service from the main window footer, the settings window, or the tray menu; buttons are dynamically disabled by state (running → "Start" disabled, stopped → "Stop/Restart" disabled, starting or externally-owned → all three disabled).
 - **Two launch modes, chosen automatically** (nothing to configure): the plain build launches dsh via `npx --yes @deepseek-ai/dsh web --no-open` (tracks the npm `latest` release; cached installs reuse so restart is fast — never `--prefer-online`, which would re-download the whole tree every start); the bundled build (only the `-bundled` artifact) ships its own Node.js and dsh and works fully offline. The app picks the mode from the build type.
 - **Auto-detect + auto take over**: on startup it probes port 3080 — an externally running service is reused as-is (not taken over; Stop/Restart disabled); a service launched by this app, or released at last quit, is automatically taken over and can still be stopped/restarted.
+- If a specific version is pinned in "dsh Versions", the service always starts with that version (highest priority) and the automatic launch logic no longer applies — see "📦 dsh Version Manager" below.
 - Service logs stream live into `service.log` under the system app_config directory; files rotate automatically at 5 MB (two old archives kept). npx uses a **dedicated cache directory** (never touches the user's `~/.npm`, avoiding permission/corrupt-cache issues).
 - The status badge in the top bar and settings window updates in real time: stopped / starting / running / failed.
 
@@ -39,10 +40,22 @@ A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai
 - An externally started service is never stopped by this app (only reused).
 - Settings persist to `~/.dsh/bga-dsh-client/settings.json`.
 
+### 📦 dsh Version Manager
+
+- The "dsh Versions" panel in settings shows and switches the dsh version this client uses: **by default it is fully automatic** (the bundled build uses the dsh shipped in its runtime, the plain build uses npx which tracks the npm `latest` release). Once you pin a specific version, the service launches that version directly and stops following the npm `latest` release.
+- The list = **locally downloaded + built-in + remote versions from the npm registry**, sorted by semantic version descending (`0.1.10 > 0.1.9`, not lexicographically), with the version currently in use pinned to the top. Each row is tagged: Bundled / In Use / Downloaded / Available.
+- **Download**: "Download" runs `npm install --save-exact @deepseek-ai/dsh@<version>` in the background into `~/.dsh/bga-dsh-client/dsh-versions/<version>/` (~30–50 MB per version); progress is shown via toast and a "Downloading…" button state, and a failed install cleans up the leftover directory automatically. npm uses a dedicated app cache directory (`dsh-download-cache`) and never touches the user's `~/.npm`.
+- **Download source**: switch between the official npm registry (`registry.npmjs.org`) and the Taobao mirror (`registry.npmmirror.com`) — useful when downloads are slow from your network; it applies to the next download / list refresh.
+- **Switch / Restore Default**: both ask for confirmation, then restart the service automatically — the panel polls until port 3080 is ready and refreshes the dsh version shown in the bottom-left corner. "Restore Default" clears the pinned version: the bundled build falls back to its runtime, the plain build falls back to npx.
+- **Delete**: only versions that are *downloaded and not in use* can be deleted (the built-in version and the version in use expose no delete button); deletion runs on a background thread with a "Deleting…" button state.
+- The remote list is fetched from the npm registry and **cached for 1 hour**: opening the panel refreshes a stale cache in the background, and "Refresh Version List" pulls it manually — **offline you can still use the downloaded and built-in versions**.
+- When a version is pinned, the launch command looks like `<node> <dsh-versions/<version>/…/bin.js> web --no-open`: the bundled build uses its own Node.js, the plain build uses `node` from the system PATH — so **the plain build needs Node.js installed to use the version manager**.
+- `dsh_version` (pinned version) and `npm_registry` (download source) are persisted in `~/.dsh/bga-dsh-client/settings.json`.
+
 ### 🔄 Update Checks
 
 - Checks GitHub Releases for the latest version once 5 seconds after startup (automatic checks are at least 24 h apart, no spamming), and shows a "New version available" hint in the settings version area when one is found.
-- The version area on the left of the settings window shows the versions of node / pnpm / dsh: when the service is online it prefers the **real versions reported by the running service** (works even when launched via npx), otherwise it shows the bundled runtime versions (bundled build) or the system PATH versions (plain build). A "**Check for updates**" button allows manual checks anytime; results are shown live: new version found / already up to date / check failed.
+- The version area on the left of the settings window shows the versions of node / pnpm / dsh: when the service is online it prefers the **real versions reported by the running service** (works even when launched via npx; if a version is pinned in "dsh Versions", that pinned version is shown directly), otherwise it shows the bundled runtime versions (bundled build) or the system PATH versions (plain build). A "**Check for updates**" button allows manual checks anytime; results are shown live: new version found / already up to date / check failed.
 - When a new version is found you can "**Go to Download**" directly (opens the Releases page in your system browser); clicking "**Ignore**" suppresses the hint until a newer version is released.
 - Check results are cached to `~/.dsh/bga-dsh-client/update-cache.json`; network failures or GitHub API rate limits degrade silently without affecting normal use.
 - Maintainers need no extra release steps: keep using the existing tag-based release flow, the app reads the latest Release automatically.
@@ -65,7 +78,7 @@ A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai
 
 ### 🔒 Privacy & Telemetry
 
-- The client integrates [Sentry](https://sentry.io) for crash monitoring and anonymous behavior statistics. Uploads are limited to **behavior events** (app start, service start/stop, pairing toggle, settings saved, update-check result, settings window opened, etc.) — see [docs/Sentry.md](docs/Sentry.md) for details.
+- The client integrates [Sentry](https://sentry.io) for crash monitoring and anonymous behavior statistics. Uploads are limited to **behavior events** (app start, service start/stop, pairing toggle, settings saved, update-check result, settings window opened, dsh version switch, download-source switch, etc.) — see [docs/Sentry.md](docs/Sentry.md) for details.
 - The device identifier is an **anonymous machine ID** (an irreversible hash of hostname and MAC address, UUID format) that contains no personally identifiable information.
 - **No performance tracing** (`traces_sample_rate = 0`) and **no business content** (file contents, chat logs, API keys, etc.) is ever uploaded.
 - Uploads run asynchronously on a background thread and fail silently — they never affect normal use.
@@ -104,6 +117,7 @@ If you just want to use this desktop client, follow the steps below — **no Nod
 1. After launching, the main window shows the DSH Web GUI — identical to visiting `http://127.0.0.1:3080` in a browser.
 2. Closing the window does not quit the app; it hides to the system tray and can be brought back anytime.
 3. To allow other devices on your LAN, open "LAN Access" in settings and pair with the phone by scanning the QR code.
+4. By default the app tracks the latest dsh on npm; to **pin a specific dsh version** (stop following latest, or roll back), open "dsh Versions" in settings, download it and hit "Use" — "Restore Default" undoes it anytime.
 
 ## For Maintainers
 
@@ -145,6 +159,8 @@ bga-dsh-client/
 │       ├── settings.rs           # settings parsing & persistence
 │       ├── tray.rs               # system tray
 │       ├── update.rs             # app update checks
+│       ├── dsh.rs                # dsh version manager: list/download/switch/delete/registry
+│       ├── version.rs            # version probing & cache (node/pnpm/dsh area in settings)
 │       ├── telemetry.rs          # Sentry telemetry (anonymous behavior events)
 │       ├── i18n.rs               # localization (follows Harness language config)
 │       └── pairing/              # LAN pairing gateway (mod/forward/rewrite/tunnel)
