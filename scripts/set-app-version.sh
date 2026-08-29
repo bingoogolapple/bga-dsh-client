@@ -7,9 +7,20 @@ set -euo pipefail
 # 并同步被 git 跟踪的 src-tauri/Cargo.lock。
 # 配套 .github/workflows/release.yml：打 v* tag 前先跑本脚本，保证
 # tauri.conf.json 里的版本（决定 dmg 文件名）与 tag 一致。
-# 注意：sed -i '' 是 macOS（BSD）写法，Linux 上需改成 sed -i。
+# 跨平台：sed 的原地编辑在 BSD(macOS) 与 GNU(Linux) 上参数不同，由内部
+# sed_inplace() 统一处理，macOS / Linux 均可直接运行。
 
 cd "$(dirname "$0")/.."
+
+# sed 原地编辑：BSD(macOS) 需 `sed -i ''`，GNU(Linux) 需 `sed -i`。
+# 原先脚本硬编码了 macOS 写法（见文件头注释），在 Linux 上会失败；这里统一抹平。
+sed_inplace() {
+  if sed --version >/dev/null 2>&1; then
+    sed -i "$@"
+  else
+    sed -i '' "$@"
+  fi
+}
 
 if [ $# -ne 1 ]; then
   echo "用法: $0 <新版本号，semver 格式，如 0.2.0 或 0.2.0-beta.1>" >&2
@@ -44,9 +55,20 @@ if [ "$old" = "$new" ]; then
   exit 0
 fi
 
-sed -i '' "s/^[[:space:]]*\"version\": \"$old\"/\"version\": \"$new\"/" package.json
-sed -i '' "s/^[[:space:]]*\"version\": \"$old\"/\"version\": \"$new\"/" src-tauri/tauri.conf.json
-sed -i '' "s/^version = \"$old\"/version = \"$new\"/" src-tauri/Cargo.toml
+# 版本号里的 `.` `+` 是正则元字符（`.` 匹配任意字符、`+` 在 ERE 里是量词），
+# 用于匹配前必须转义。
+esc_old=$(printf '%s' "$old" | sed 's/[.+]/\\&/g')
+
+# 关键：用 `([[:space:]]*)` 把原有缩进**捕获**下来，替换时用 `\1` 原样写回。
+#
+# 之前的写法 `s/^[[:space:]]*"version": ".../"version": "..."/` 只吞不吐——
+# 匹配阶段吃掉了行首空白，替换阶段却没有还回去，于是每次跑本脚本都会把
+# version 行的缩进抹平。package.json 因此过不了 CI 的 Prettier 检查
+# （v0.0.4 的构建就是这么挂的）；tauri.conf.json 同样被抹了缩进，只是它不在
+# Prettier 的检查范围内所以没暴露。
+sed_inplace -E "s/^([[:space:]]*)\"version\": \"$esc_old\"/\1\"version\": \"$new\"/" package.json
+sed_inplace -E "s/^([[:space:]]*)\"version\": \"$esc_old\"/\1\"version\": \"$new\"/" src-tauri/tauri.conf.json
+sed_inplace -E "s/^version = \"$esc_old\"/version = \"$new\"/" src-tauri/Cargo.toml
 echo "已更新: $old -> $new"
 
 # 同步被 git 跟踪的 Cargo.lock 中本包条目的 version（只改 name = "bga-dsh-client" 后
