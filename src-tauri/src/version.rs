@@ -132,11 +132,16 @@ fn placeholder(service_up: bool) -> VersionInfo {
 /// 执行 `prog [args]` 并捕获 stdout 原文（trim 后）；超时或失败返回 None。
 /// 不经 shell（Windows 系统命令走 cmd /C，见 sys_version）。
 /// `extra_path`：可选的 PATH 覆盖值（仅 Unix 生效），用于在 Dock 启动等短 PATH 场景下定位 node/pnpm/dsh。
+///
+/// 参数名刻意带下划线前缀：它只在 `#[cfg(not(windows))]` 分支里被消费，Windows 上用不到。
+/// 去掉前缀会让 Windows 构建被 clippy 的 `unused_variables` 拦下——CI 跑的是
+/// `cargo clippy --all-targets -- -D warnings`，警告即失败。与下方
+/// `#[cfg(windows)] fn sys_version(cmd, _extra_path)` 的处理保持一致。
 fn run_capture(
     prog: &Path,
     args: &[&OsStr],
     timeout: Duration,
-    extra_path: Option<&str>,
+    _extra_path: Option<&str>,
 ) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
@@ -144,7 +149,7 @@ fn run_capture(
     let mut builder = Command::new(prog);
     builder.args(args);
     #[cfg(not(windows))]
-    if let Some(path) = extra_path {
+    if let Some(path) = _extra_path {
         builder.env("PATH", path);
     }
     let mut child = builder
