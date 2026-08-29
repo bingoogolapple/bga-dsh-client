@@ -15,6 +15,7 @@
 
 ![主界面截图](images/main-window-zh.png)
 ![dsh 服务控制](images/dsh-server-zh.png)
+![dsh 版本管理](images/dsh-version-manage-zh.png)
 ![局域网代理服务控制](images/lan-proxy-zh.png)
 
 ## 功能介绍
@@ -136,6 +137,7 @@ bga-dsh-client/
 ├── images/                       # README 截图素材（中文/英文各一组）
 │   ├── main-window-zh.png / main-window-en.png   # 主界面
 │   ├── dsh-server-zh.png / dsh-server-en.png     # dsh 服务控制
+│   ├── dsh-version-manage-zh.png / dsh-version-manage-en.png  # dsh 版本管理
 │   └── lan-proxy-zh.png / lan-proxy-en.png       # 局域网代理服务控制
 ├── scripts/
 │   ├── build-release.sh          # 发布构建脚本（bundled / two 模式）

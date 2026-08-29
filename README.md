@@ -15,6 +15,7 @@ A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai
 
 ![Main Window](images/main-window-en.png)
 ![DSH Service Control](images/dsh-server-en.png)
+![dsh Version Manager](images/dsh-version-manage-en.png)
 ![LAN Proxy Service Control](images/lan-proxy-en.png)
 
 ## Features
@@ -136,6 +137,7 @@ bga-dsh-client/
 ├── images/                       # README screenshots (zh & en sets)
 │   ├── main-window-zh.png / main-window-en.png   # main window
 │   ├── dsh-server-zh.png / dsh-server-en.png     # DSH service control
+│   ├── dsh-version-manage-zh.png / dsh-version-manage-en.png  # dsh version manager
 │   └── lan-proxy-zh.png / lan-proxy-en.png       # LAN proxy service control
 ├── scripts/
 │   ├── build-release.sh          # release build script (bundled / two modes)
