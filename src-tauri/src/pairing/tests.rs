@@ -27,16 +27,16 @@ use super::token::{gen_token, TOKEN_LEN};
 use super::forward::full_body;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use std::io::{Read, Write};
 use hyper::header::{
     HeaderMap, CONNECTION, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, TRANSFER_ENCODING, UPGRADE,
 };
 use hyper::header::{HeaderValue, CONTENT_TYPE, LOCATION, SET_COOKIE};
 use hyper::header::{ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, ETAG};
-use std::sync::Mutex;
 use hyper::Method;
 use hyper::StatusCode;
 use rewrite::PAIR_COOKIE;
+use std::io::{Read, Write};
+use std::sync::Mutex;
 
 #[test]
 fn rewrite_connection_bundle_turns_is_loopback_true() {
@@ -568,7 +568,10 @@ fn pick_auth_cookie_keeps_only_the_pair() {
         Some("dsh-auth-abc123=v1.payload.sig")
     );
     // 网关自己的 dsh_pair 不能被当成上游会话。
-    assert_eq!(pick_auth_cookie("dsh_pair=deadbeef; Path=/; HttpOnly"), None);
+    assert_eq!(
+        pick_auth_cookie("dsh_pair=deadbeef; Path=/; HttpOnly"),
+        None
+    );
     // 空值（注销型 cookie）不是有效会话。
     assert_eq!(pick_auth_cookie("dsh-auth-abc=; Path=/"), None);
 }
@@ -583,7 +586,10 @@ fn inject_auth_cookie_merges_without_clobbering_others() {
     );
     inject_auth_cookie(&mut headers, "dsh-auth-new=fresh");
     let cookie = headers.get(COOKIE).unwrap().to_str().unwrap().to_string();
-    assert!(cookie.contains("theme=dark"), "不能吃掉浏览器自己的: {cookie}");
+    assert!(
+        cookie.contains("theme=dark"),
+        "不能吃掉浏览器自己的: {cookie}"
+    );
     assert!(
         !cookie.contains("dsh-auth-old=stale"),
         "同前缀的旧值必须被替换: {cookie}"
@@ -609,10 +615,12 @@ fn exchange_trades_token_for_session_cookie() {
         let mut buf = [0u8; 2048];
         let n = sock.read(&mut buf).unwrap();
         let req = String::from_utf8_lossy(&buf[..n]).to_string();
-        assert!(req.starts_with("GET /?token=tok-abc HTTP/1.1\r\n"), "req: {req}");
         assert!(
-            req.to_ascii_lowercase()
-                .contains(&format!("host: {addr}")),
+            req.starts_with("GET /?token=tok-abc HTTP/1.1\r\n"),
+            "req: {req}"
+        );
+        assert!(
+            req.to_ascii_lowercase().contains(&format!("host: {addr}")),
             "Host 必须是 loopback authority（上游据此算 cookie 名）: {req}"
         );
         sock.write_all(

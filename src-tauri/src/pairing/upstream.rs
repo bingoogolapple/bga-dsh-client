@@ -111,7 +111,7 @@ pub(crate) fn exchange(upstream: SocketAddr, token: &str) -> Option<String> {
         }
         match stream.read(&mut tmp) {
             Ok(0) | Err(_) => break,
-            Ok(n) => buf.extend_from_slice(&mut tmp[..n]),
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
         }
     }
     // 头名大小写不敏感，cookie 值却区分大小写：只把名字那一段拿去比较。

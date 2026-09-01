@@ -187,7 +187,9 @@ pub(crate) fn is_connection_bundle_response(uri_path: &str, content_type: &str) 
             .any(|entry| CONNECTION_ENTRIES.contains(&entry.trim()));
     }
     // 单文件形式（早期 dsh、或逐块加载的 HMR 路径）：按结尾匹配即可。
-    CONNECTION_ENTRIES.iter().any(|want| uri_path.ends_with(want))
+    CONNECTION_ENTRIES
+        .iter()
+        .any(|want| uri_path.ends_with(want))
 }
 
 /// 改写 connection bundle：命中目标表达式则返回改写后的字节；未命中返回 None，

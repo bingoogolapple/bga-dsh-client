@@ -1385,7 +1385,10 @@ mod tests {
     /// `token=` 后面没有值（畸形/被截断的行）不能让打码逻辑死循环。
     #[test]
     fn redact_token_terminates_on_empty_value() {
-        assert_eq!(redact_token("dsh web: http://x/?token="), "dsh web: http://x/?token=");
+        assert_eq!(
+            redact_token("dsh web: http://x/?token="),
+            "dsh web: http://x/?token="
+        );
         assert_eq!(redact_token("token="), "token=");
     }
 

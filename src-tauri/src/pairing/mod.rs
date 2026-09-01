@@ -446,11 +446,7 @@ async fn handle_request(
             if upstream::ensure_cookie(&app, upstream).is_none() {
                 push_log(
                     &app,
-                    tr(
-                        crate::i18n::current(&app),
-                        "pair.upstream_fail_log",
-                        &[],
-                    ),
+                    tr(crate::i18n::current(&app), "pair.upstream_fail_log", &[]),
                 );
             }
             push_log(

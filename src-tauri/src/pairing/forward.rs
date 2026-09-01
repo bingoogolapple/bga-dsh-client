@@ -132,9 +132,7 @@ pub(crate) async fn forward_regular(
         if is_framing_header(name) {
             continue;
         }
-        if rewritten
-            && (name == CONTENT_ENCODING || name == ETAG || name == CACHE_CONTROL)
-        {
+        if rewritten && (name == CONTENT_ENCODING || name == ETAG || name == CACHE_CONTROL) {
             continue;
         }
         resp = resp.header(name, value);
