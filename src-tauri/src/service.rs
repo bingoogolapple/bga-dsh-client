@@ -884,7 +884,9 @@ pub(crate) fn store_launch_token(app: &AppHandle, token: String) {
 /// 从历史日志回填令牌：尾随线程只处理本次会话的新增行，而服务可能是上次
 /// 放生的孤儿、或在应用启动前就已经在跑——那行启动输出早就被跳过了。
 pub(crate) fn prime_launch_token(app: &AppHandle) {
-    let token = read_tail(&files_dir(app).join("service.log"), 500)
+    // 扫描整个尾部窗口（512KB）而不是最后几行：服务可能已经跑了很久，那行启动
+    // 输出早被后续的会话日志刷出了小窗口，漏掉它网关就一直拿不到令牌。
+    let token = read_tail(&files_dir(app).join("service.log"), usize::MAX)
         .iter()
         .rev()
         .find_map(|line| parse_launch_token(line));

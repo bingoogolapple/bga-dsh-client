@@ -51,7 +51,7 @@ use std::time::{Duration, SystemTime};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response};
+use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -66,6 +66,7 @@ mod qrcode;
 mod rewrite;
 mod token;
 mod tunnel;
+mod upstream;
 
 use forward::{build_client, forward_regular};
 use http::{denied_response, redirect_home_with_session};
@@ -116,6 +117,10 @@ pub struct Pairing {
     /// 浏览器走、不跟着 IP 走——局域网与内网穿透隧道（localhost.run 等）行为一致，
     /// 隧道里每台设备各自配对，互不影响。
     sessions: HashMap<String, Session>,
+    /// 网关代持的上游（dsh）会话 cookie，以及换它时用的启动令牌——令牌一变
+    /// 就作废重换（详见 `upstream` 模块文档）。
+    upstream_cookie: Option<String>,
+    upstream_cookie_token: Option<String>,
 }
 
 /// 一个已配对浏览器会话。
@@ -162,6 +167,8 @@ impl Pairing {
             stop: Arc::new(AtomicBool::new(true)),
             done: None,
             sessions: HashMap::new(),
+            upstream_cookie: None,
+            upstream_cookie_token: None,
         }
     }
 }
@@ -276,6 +283,17 @@ pub fn ensure_started(app: &AppHandle) -> Result<(), String> {
         // tx 随任务结束 drop → 等待方的 recv 解除，可确认端口已释放。
         let _done_tx = tx;
         serve_loop(h, listener, stop, client, upstream).await;
+    });
+    // 预热上游会话：手机上第一次访问就不必等这次交换。失败不记日志，
+    // 配对成功时还会再试一次（那时才值得提示用户）。
+    let warm = app.clone();
+    std::thread::spawn(move || {
+        if upstream::ensure_cookie(&warm, upstream).is_some() {
+            push_log(
+                &warm,
+                tr(crate::i18n::current(&warm), "pair.upstream_ok_log", &[]),
+            );
+        }
     });
     Ok(())
 }
@@ -409,6 +427,17 @@ async fn handle_request(
             );
             rotate_code(&mut p);
             drop(p);
+            // 配对成功就顺手把上游会话换好：手机 302 回首页时不会撞上 401。
+            if upstream::ensure_cookie(&app, upstream).is_none() {
+                push_log(
+                    &app,
+                    tr(
+                        crate::i18n::current(&app),
+                        "pair.upstream_fail_log",
+                        &[],
+                    ),
+                );
+            }
             push_log(
                 &app,
                 tr(
@@ -445,10 +474,20 @@ async fn handle_request(
         return denied_response(crate::i18n::current(&app));
     }
 
+    // dsh 0.1.2+ 的 /api 认证：手机浏览器没有上游的会话 cookie，由网关代持并
+    // 注入（缓存命中时开销可忽略）。
+    let cookie = upstream::ensure_cookie(&app, upstream);
+
     if is_upgrade_request(req.headers()) {
-        return handle_upgrade(req, upstream).await;
+        return handle_upgrade(req, upstream, cookie.as_deref()).await;
     }
-    forward_regular(req, client, upstream).await
+    let res = forward_regular(req, client, upstream, cookie.as_deref()).await;
+    if res.status() == StatusCode::UNAUTHORIZED {
+        // 代持的会话失效了（cookie 过期 / 上游凭据记录被删）：作废缓存，
+        // 让下一个请求重新交换。当前请求已消费掉 body，无法重放。
+        upstream::invalidate(&app);
+    }
+    res
 }
 
 // ---------------------------------------------------------------------------

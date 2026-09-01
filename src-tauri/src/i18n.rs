@@ -245,6 +245,10 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "pair.down_body") => if_en(locale, "The DSH service on your computer is not running or temporarily unreachable. Start it on the computer, then refresh this page.", "桌面端 DSH 服务尚未启动或暂时不可达，请先在电脑上启动服务，再刷新本页。"),
         (_, "pair.gw_title") => if_en(locale, "Gateway Error", "网关错误"),
         (_, "pair.gw_body") => if_en(locale, "Proxy forwarding failed. Refresh and retry; if it persists, check the DSH service status on your computer.", "代理转发失败，请刷新重试；若持续出现，请检查桌面端 DSH 服务状态。"),
+        // 上游（dsh）会话代持：token → cookie 交换
+        (_, "pair.upstream_ok_log") => if_en(locale, "Upstream session established: exchanged the dsh launch token for a session cookie", "上游会话已建立：已用 dsh 启动令牌换得会话 cookie"),
+        (_, "pair.upstream_fail_log") => if_en(locale, "Cannot establish an upstream session: no dsh launch token available. The service was likely started outside this app (its output never reaches the log), so LAN requests will be answered with 401", "无法建立上游会话：未拿到 dsh 启动令牌。服务多半不是本应用启动的（其输出不进本应用日志），局域网访问会得到 401"),
+        (_, "pair.upstream_exchange_fail_log") => if_en(locale, "Cannot establish an upstream session: the token exchange was rejected. The token belongs to a dsh process that has exited, or the service is unreachable; restart the service from this app and retry", "无法建立上游会话：令牌交换被上游拒绝。该令牌属于已退出的 dsh 进程，或服务不可达；请用本应用重启服务后重试"),
 
         _ => key,
     }

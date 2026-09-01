@@ -16,6 +16,7 @@ use super::rewrite::{
 use super::tunnel::{
     build_raw_request_head, build_upgrade_response, find_head_end, head_starts_101,
 };
+use super::upstream::{exchange, inject_auth_cookie, pick_auth_cookie};
 use super::*;
 // 以下符号在 pairing 二次拆分后移入了各自子模块，需显式引入
 // （`super::*` 已带不到它们）。
@@ -25,10 +26,13 @@ use super::token::{gen_token, TOKEN_LEN};
 use super::forward::full_body;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+use std::io::{Read, Write};
 use hyper::header::{
     HeaderMap, CONNECTION, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, TRANSFER_ENCODING, UPGRADE,
 };
 use hyper::header::{HeaderValue, CONTENT_TYPE, LOCATION, SET_COOKIE};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, ETAG};
+use std::sync::Mutex;
 use hyper::Method;
 use hyper::StatusCode;
 use rewrite::PAIR_COOKIE;
@@ -358,7 +362,7 @@ async fn forward_regular_injects_polyfill_into_html() {
         // 直接进入转发阶段（门禁纯函数已单独覆盖）。
         let client = client.clone();
         let upstream = upstream_addr;
-        Box::pin(async move { forward_regular(req, client, upstream).await })
+        Box::pin(async move { forward_regular(req, client, upstream, None).await })
             as std::pin::Pin<Box<dyn std::future::Future<Output = Response<HandlerBody>> + Send>>
     }))
     .await;
@@ -393,7 +397,7 @@ async fn forward_regular_leaves_json_untouched() {
     let gateway_addr = spawn_gateway(Arc::new(move |req| {
         let client = client.clone();
         let upstream = upstream_addr;
-        Box::pin(async move { forward_regular(req, client, upstream).await })
+        Box::pin(async move { forward_regular(req, client, upstream, None).await })
             as std::pin::Pin<Box<dyn std::future::Future<Output = Response<HandlerBody>> + Send>>
     }))
     .await;
@@ -420,7 +424,7 @@ async fn forward_regular_does_not_inject_non_200_html() {
     let gateway_addr = spawn_gateway(Arc::new(move |req| {
         let client = client.clone();
         let upstream = upstream_addr;
-        Box::pin(async move { forward_regular(req, client, upstream).await })
+        Box::pin(async move { forward_regular(req, client, upstream, None).await })
             as std::pin::Pin<Box<dyn std::future::Future<Output = Response<HandlerBody>> + Send>>
     }))
     .await;
@@ -490,7 +494,7 @@ async fn probe_gateway_full_chain_to_dsh() {
     let client = build_client();
     let gateway_addr = spawn_gateway(Arc::new(move |req| {
         let client = client.clone();
-        Box::pin(async move { forward_regular(req, client, upstream_addr).await })
+        Box::pin(async move { forward_regular(req, client, upstream_addr, None).await })
             as std::pin::Pin<Box<dyn std::future::Future<Output = Response<HandlerBody>> + Send>>
     }))
     .await;
@@ -519,8 +523,188 @@ fn fresh_pairing_is_stopped() {
     assert_eq!(p.port, 0);
     assert!(p.sessions.is_empty());
     assert!(p.error.is_none());
+    // 上游会话尚未代持。
+    assert!(p.upstream_cookie.is_none());
+    assert!(p.upstream_cookie_token.is_none());
     assert_eq!(p.code.len(), 6);
     assert!(p.code.chars().all(|c| c.is_ascii_digit()));
+}
+
+// -----------------------------------------------------------------------
+// 上游会话代持：dsh 0.1.2+ 要求 /api 带会话 cookie，由网关用启动令牌换取代持
+// -----------------------------------------------------------------------
+
+/// 只认 dsh 的会话 cookie，且只保留 `name=value`（属性一概丢掉）。
+#[test]
+fn pick_auth_cookie_keeps_only_the_pair() {
+    let raw = "dsh-auth-abc123=v1.payload.sig; Path=/; HttpOnly; SameSite=Strict";
+    assert_eq!(
+        pick_auth_cookie(raw).as_deref(),
+        Some("dsh-auth-abc123=v1.payload.sig")
+    );
+    // 网关自己的 dsh_pair 不能被当成上游会话。
+    assert_eq!(pick_auth_cookie("dsh_pair=deadbeef; Path=/; HttpOnly"), None);
+    // 空值（注销型 cookie）不是有效会话。
+    assert_eq!(pick_auth_cookie("dsh-auth-abc=; Path=/"), None);
+}
+
+/// 注入时保留浏览器自己的 cookie，替换掉同前缀的旧值。
+#[test]
+fn inject_auth_cookie_merges_without_clobbering_others() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        COOKIE,
+        HeaderValue::from_static("theme=dark; dsh-auth-old=stale"),
+    );
+    inject_auth_cookie(&mut headers, "dsh-auth-new=fresh");
+    let cookie = headers.get(COOKIE).unwrap().to_str().unwrap().to_string();
+    assert!(cookie.contains("theme=dark"), "不能吃掉浏览器自己的: {cookie}");
+    assert!(
+        !cookie.contains("dsh-auth-old=stale"),
+        "同前缀的旧值必须被替换: {cookie}"
+    );
+    assert!(cookie.ends_with("dsh-auth-new=fresh"), "cookie: {cookie}");
+}
+
+/// 请求本来没有 Cookie 头时也能注入。
+#[test]
+fn inject_auth_cookie_works_without_existing_cookie() {
+    let mut headers = HeaderMap::new();
+    inject_auth_cookie(&mut headers, "dsh-auth-new=fresh");
+    assert_eq!(headers.get(COOKIE).unwrap(), "dsh-auth-new=fresh");
+}
+
+/// 令牌交换：网关必须带令牌、以 loopback authority 去换，并解析回 cookie。
+#[test]
+fn exchange_trades_token_for_session_cookie() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 2048];
+        let n = sock.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(req.starts_with("GET /?token=tok-abc HTTP/1.1\r\n"), "req: {req}");
+        assert!(
+            req.to_ascii_lowercase()
+                .contains(&format!("host: {addr}")),
+            "Host 必须是 loopback authority（上游据此算 cookie 名）: {req}"
+        );
+        sock.write_all(
+            b"HTTP/1.1 303 See Other\r\nlocation: /\r\nset-cookie: dsh-auth-xyz=v1.p.s; Path=/; HttpOnly; SameSite=Strict\r\ncontent-length: 0\r\n\r\n",
+        )
+        .unwrap();
+    });
+    let cookie = exchange(addr, "tok-abc");
+    server.join().unwrap();
+    assert_eq!(cookie.as_deref(), Some("dsh-auth-xyz=v1.p.s"));
+}
+
+/// 上游不接受令牌（401，无 Set-Cookie）时不能凭空造出一枚 cookie。
+#[test]
+fn exchange_returns_none_when_upstream_refuses() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 2048];
+        let _ = sock.read(&mut buf).unwrap();
+        sock.write_all(
+            b"HTTP/1.1 401 Unauthorized\r\ncontent-type: text/plain\r\ncontent-length: 0\r\n\r\n",
+        )
+        .unwrap();
+    });
+    let cookie = exchange(addr, "wrong-token");
+    server.join().unwrap();
+    assert_eq!(cookie, None);
+}
+
+/// 上游没启动（端口无监听）是常态，不能 panic。
+#[test]
+fn exchange_returns_none_when_upstream_is_down() {
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = dead.local_addr().unwrap();
+    drop(dead);
+    assert_eq!(exchange(addr, "tok"), None);
+}
+
+// -----------------------------------------------------------------------
+// 压缩与改写：网关改过 body 的响应不能再声称自己是压缩的
+// -----------------------------------------------------------------------
+
+/// 网关会往 HTML 里注入 polyfill，所以上游一旦压缩，浏览器就会拿到
+/// 「gzip 数据 + 明文脚本」而报 `ERR_CONTENT_DECODING_FAILED`。两道防线：
+/// 请求侧显式声明只接受 identity，且改写过的响应一律剥掉 content-encoding。
+#[tokio::test]
+async fn rewritten_html_never_claims_compression() {
+    let seen: Arc<Mutex<Option<HeaderMap>>> = Arc::new(Mutex::new(None));
+    let recorder = seen.clone();
+    let upstream_addr = spawn_fake_upstream(Arc::new(move |req| {
+        *recorder.lock().unwrap() = Some(req.headers().clone());
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(CONTENT_ENCODING, "gzip")
+            .header(ETAG, "\"abc\"")
+            .body(Full::new(Bytes::from_static(
+                b"<!doctype html><html><head><title>t</title></head><body>hi</body></html>",
+            )))
+            .unwrap()
+    }))
+    .await;
+    let client = build_client();
+    let gateway_addr = spawn_gateway(Arc::new(move |req| {
+        let client = client.clone();
+        let upstream = upstream_addr;
+        Box::pin(async move { forward_regular(req, client, upstream, None).await })
+            as std::pin::Pin<Box<dyn std::future::Future<Output = Response<HandlerBody>> + Send>>
+    }))
+    .await;
+
+    let (status, headers, body) = gateway_get(gateway_addr, "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.get(CONTENT_ENCODING).is_none(),
+        "改写过的 HTML 不能带 content-encoding: {headers:?}"
+    );
+    assert!(
+        headers.get(ETAG).is_none(),
+        "改写过的 HTML 不能沿用原 etag: {headers:?}"
+    );
+    assert!(body.windows(10).any(|w| w == b"randomUUID"));
+
+    let sent = seen.lock().unwrap().clone().expect("上游应收到请求");
+    assert_eq!(
+        sent.get(ACCEPT_ENCODING).and_then(|v| v.to_str().ok()),
+        Some("identity"),
+        "必须显式声明 identity（缺这个头表示「任何编码都行」）: {sent:?}"
+    );
+}
+
+/// 没改写的响应（body 原样转发）可以保留 content-encoding——不能一刀切地剥。
+#[tokio::test]
+async fn untouched_body_keeps_content_encoding() {
+    let upstream_addr = spawn_fake_upstream(Arc::new(move |_req| {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_ENCODING, "gzip")
+            .body(Full::new(Bytes::from_static(b"compressed-bytes")))
+            .unwrap()
+    }))
+    .await;
+    let client = build_client();
+    let gateway_addr = spawn_gateway(Arc::new(move |req| {
+        let client = client.clone();
+        let upstream = upstream_addr;
+        Box::pin(async move { forward_regular(req, client, upstream, None).await })
+            as std::pin::Pin<Box<dyn std::future::Future<Output = Response<HandlerBody>> + Send>>
+    }))
+    .await;
+
+    let (_, headers, body) = gateway_get(gateway_addr, "/api").await;
+    assert_eq!(headers.get(CONTENT_ENCODING).unwrap(), "gzip");
+    assert_eq!(body.as_ref(), b"compressed-bytes");
 }
 
 /// 端口探测：BASE_PORT 起的 31 个端口里应能绑到一个；即便全部被占也只返回

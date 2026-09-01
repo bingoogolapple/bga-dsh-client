@@ -8,6 +8,7 @@ use super::rewrite::{
     inject_html_polyfills, is_framing_header, rewrite_connection_bundle, rewrite_loopback,
     strip_hop_by_hop, strip_pair_cookie,
 };
+use super::upstream::inject_auth_cookie;
 
 /// 等待上游返回响应头（首字节）的超时。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -15,7 +16,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const HTML_BODY_MAX: usize = 8 * 1024 * 1024;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::header::{HeaderMap, CONTENT_TYPE};
+use hyper::header::{HeaderMap, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, ETAG};
 use hyper::{Method, Request, Response, StatusCode, Uri, Version};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client as LegacyClient;
@@ -35,6 +36,7 @@ fn build_forward_request(
     mut headers: HeaderMap,
     body: Incoming,
     upstream: SocketAddr,
+    cookie: Option<&str>,
 ) -> Result<Request<HandlerBody>, ()> {
     // 绝对形式 URI 指向 loopback：hyper_util 连接器据此连接目标端口，
     // 同时 Host 头由 rewrite_loopback 设定为 127.0.0.1:3080。
@@ -45,6 +47,15 @@ fn build_forward_request(
     // 网关自己的配对会话 Cookie 不转发给上游（上游不需要也不该看到）。
     strip_pair_cookie(&mut headers);
     rewrite_loopback(&mut headers);
+    // 网关代持的上游会话 Cookie：dsh 0.1.2+ 的 /api 认证（`upstream` 模块）。
+    if let Some(cookie) = cookie {
+        inject_auth_cookie(&mut headers, cookie);
+    }
+    // 只接受未压缩的响应：本网关会改写 HTML（polyfill）与 connection bundle，
+    // 上游一旦压缩，改写后的 body 就与 Content-Encoding 对不上，浏览器会报
+    // `ERR_CONTENT_DECODING_FAILED`。必须显式写 identity——按 RFC 7231，请求里
+    // 没有 Accept-Encoding 反而表示「任何编码都可以接受」。
+    headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
     let body: HandlerBody = body.map_err(|e| Box::new(e) as BoxErr).boxed();
     let mut builder = Request::builder()
         .method(method)
@@ -60,6 +71,7 @@ pub(crate) async fn forward_regular(
     req: Request<Incoming>,
     client: UpstreamClient,
     upstream: SocketAddr,
+    cookie: Option<&str>,
 ) -> Response<HandlerBody> {
     let (parts, body) = req.into_parts();
     let uri_path = parts
@@ -74,6 +86,7 @@ pub(crate) async fn forward_regular(
         parts.headers,
         body,
         upstream,
+        cookie,
     ) {
         Ok(fwd) => fwd,
         Err(()) => return bad_gateway_response(),
@@ -98,11 +111,18 @@ pub(crate) async fn forward_regular(
 
     // 剥离 framing 头后由 hyper server 重算（注入/改写路径 body 大小会变化；
     // 流式路径避免上游 Connection 头与 hyper 分帧冲突）。
+    // 改写过 body 的响应不能再声称自己是压缩的，也不该沿用原 etag（内容已经变了）——
+    // 请求侧已声明只接受 identity，这里是兜底：上游若仍压缩，宁可丢掉这个头。
+    let rewritten = is_injectable || is_connection_bundle;
     let mut resp = Response::builder().status(status);
     for (name, value) in response.headers() {
-        if !is_framing_header(name) {
-            resp = resp.header(name, value);
+        if is_framing_header(name) {
+            continue;
         }
+        if rewritten && (name == CONTENT_ENCODING || name == ETAG) {
+            continue;
+        }
+        resp = resp.header(name, value);
     }
 
     if is_injectable {

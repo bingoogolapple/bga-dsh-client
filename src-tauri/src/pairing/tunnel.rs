@@ -28,6 +28,7 @@ struct PreparedUpgrade {
 pub(crate) async fn handle_upgrade(
     mut req: Request<Incoming>,
     upstream: SocketAddr,
+    cookie: Option<&str>,
 ) -> Response<HandlerBody> {
     let method = req.method().clone();
     let uri_path = req
@@ -40,6 +41,10 @@ pub(crate) async fn handle_upgrade(
     // 并剥离网关自己的配对会话 Cookie（不把网关身份泄露给上游）。
     rewrite_loopback(&mut headers);
     super::rewrite::strip_pair_cookie(&mut headers);
+    // 网关代持的上游会话 Cookie：WebSocket 握手同样要过 dsh 的认证。
+    if let Some(cookie) = cookie {
+        super::upstream::inject_auth_cookie(&mut headers, cookie);
+    }
 
     let prepared = match tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
