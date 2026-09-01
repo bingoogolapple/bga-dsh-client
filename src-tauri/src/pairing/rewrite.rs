@@ -125,6 +125,39 @@ const IS_LOOPBACK_EVAL: &str =
     "pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname)";
 const IS_LOOPBACK_TRUE: &str = "true";
 
+/// combo 合并路由的标记：dsh 把所有插件脚本并成一个响应下发，
+/// URL 形如 `/plugins/??connection/client.js,ui-theme/client.js&rev=<hash>`
+/// （见 `client-modules` 的 `comboUrl`）。单文件形式 `/plugins/<id>/client.js`
+/// 只出现在 source map 的回退地址里，实际不再提供。
+const COMBO_MARKER: &str = "/plugins/??";
+/// `dsh-client-connection` 的 bundle 在 combo 列表里的条目名是**完整包名**，
+/// 不是 plugin id（实测 dsh 0.1.2-alpha.3：
+/// `/plugins/??@deepseek-ai/dsh-client-connection/client.js&rev=72ff4a1a…`）。
+/// 两个候选覆盖带 scope 与不带 scope 的安装形式。
+const CONNECTION_ENTRIES: [&str; 2] = [
+    "@deepseek-ai/dsh-client-connection/client.js",
+    "dsh-client-connection/client.js",
+];
+
+/// 这个响应是不是装着 connection 插件脚本（因而值得改写）。
+///
+/// combo 列表按逗号分隔，必须**整段相等**才算命中——否则
+/// `@deepseek-ai/dsh-client-ui-connection/client.js` 这类后缀会误伤。
+/// source map（`.js.map`）天然不匹配。
+pub(crate) fn is_connection_bundle_response(uri_path: &str, content_type: &str) -> bool {
+    if !content_type.contains("javascript") {
+        return false;
+    }
+    if let Some((_, rest)) = uri_path.split_once(COMBO_MARKER) {
+        let list = rest.split('&').next().unwrap_or("");
+        return list
+            .split(',')
+            .any(|entry| CONNECTION_ENTRIES.contains(&entry.trim()));
+    }
+    // 单文件形式（早期 dsh、或逐块加载的 HMR 路径）：按结尾匹配即可。
+    CONNECTION_ENTRIES.iter().any(|want| uri_path.ends_with(want))
+}
+
 /// 改写 connection bundle：命中目标表达式则返回改写后的字节；未命中返回 None，
 /// 由调用方决定回退与告警（升级导致 bundle 形态变化时静默降级）。
 pub(crate) fn rewrite_connection_bundle(bytes: &[u8]) -> Option<Vec<u8>> {

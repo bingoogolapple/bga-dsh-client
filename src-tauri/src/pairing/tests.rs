@@ -10,8 +10,9 @@
 
 use super::forward::forward_regular;
 use super::rewrite::{
-    extract_pair_cookie, inject_html_polyfills, is_upgrade_request, query_has_pair,
-    rewrite_connection_bundle, rewrite_loopback, strip_hop_by_hop, strip_pair_cookie, POLYFILL,
+    extract_pair_cookie, inject_html_polyfills, is_connection_bundle_response, is_upgrade_request,
+    query_has_pair, rewrite_connection_bundle, rewrite_loopback, strip_hop_by_hop,
+    strip_pair_cookie, POLYFILL,
 };
 use super::tunnel::{
     build_raw_request_head, build_upgrade_response, find_head_end, head_starts_101,
@@ -637,6 +638,69 @@ fn exchange_returns_none_when_upstream_is_down() {
     let addr = dead.local_addr().unwrap();
     drop(dead);
     assert_eq!(exchange(addr, "tok"), None);
+}
+
+// -----------------------------------------------------------------------
+// 插件脚本识别：dsh 用 combo 路由合并下发，单文件形式早已不提供
+// -----------------------------------------------------------------------
+
+/// combo URL 的真实形态（dsh 0.1.2-alpha.3 实测）：条目是**完整包名**，
+/// 每个插件一个 combo，且列表项必须整段相等才算命中。
+#[test]
+fn is_connection_bundle_matches_combo_entry_exactly() {
+    let js = "application/javascript";
+    assert!(is_connection_bundle_response(
+        "/plugins/??@deepseek-ai/dsh-client-connection/client.js&rev=72ff4a1abd9ca4b0-7",
+        js
+    ));
+    // 把所有插件并成一个 combo 的启动请求，同样要命中。
+    assert!(is_connection_bundle_response(
+        "/plugins/??@deepseek-ai/dsh-typert-registry/client.js,@deepseek-ai/dsh-client-connection/client.js,@deepseek-ai/dsh-client-ui-theme/client.js&rev=af5a12a2",
+        js
+    ));
+    // 不带 scope 的安装形式。
+    assert!(is_connection_bundle_response(
+        "/plugins/??dsh-client-connection/client.js&rev=abc123",
+        js
+    ));
+    // 列表里没有 connection 就不该去动其它插件的脚本。
+    assert!(!is_connection_bundle_response(
+        "/plugins/??@deepseek-ai/dsh-client-ui-theme/client.js&rev=abc123",
+        js
+    ));
+    // 后缀不能误伤：名字以 connection 结尾的**另一个**插件。
+    assert!(!is_connection_bundle_response(
+        "/plugins/??@deepseek-ai/dsh-client-ui-connection/client.js&rev=abc123",
+        js
+    ));
+    // 早期按 plugin id 下发的形态（已不提供，仅作回归保护）。
+    assert!(!is_connection_bundle_response(
+        "/plugins/??connection/client.js&rev=abc123",
+        js
+    ));
+    // source map 不改写。
+    assert!(!is_connection_bundle_response(
+        "/plugins/??@deepseek-ai/dsh-client-connection/client.js.map&rev=abc123",
+        js
+    ));
+    // 非脚本响应一律不改写。
+    assert!(!is_connection_bundle_response(
+        "/plugins/??@deepseek-ai/dsh-client-connection/client.js&rev=abc123",
+        "text/html"
+    ));
+}
+
+/// 单文件形式（早期 dsh、或逐块加载的路径）按结尾匹配。
+#[test]
+fn is_connection_bundle_supports_single_file_form() {
+    assert!(is_connection_bundle_response(
+        "/plugins/@deepseek-ai/dsh-client-connection/client.js",
+        "application/javascript"
+    ));
+    assert!(is_connection_bundle_response(
+        "/plugins/dsh-client-connection/client.js",
+        "text/javascript; charset=utf-8"
+    ));
 }
 
 // -----------------------------------------------------------------------

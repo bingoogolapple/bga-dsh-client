@@ -5,8 +5,8 @@ use super::*;
 
 use super::http::{bad_gateway_response, service_down_response};
 use super::rewrite::{
-    inject_html_polyfills, is_framing_header, rewrite_connection_bundle, rewrite_loopback,
-    strip_hop_by_hop, strip_pair_cookie,
+    inject_html_polyfills, is_connection_bundle_response, is_framing_header,
+    rewrite_connection_bundle, rewrite_loopback, strip_hop_by_hop, strip_pair_cookie,
 };
 use super::upstream::inject_auth_cookie;
 
@@ -14,6 +14,11 @@ use super::upstream::inject_auth_cookie;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// 200 text/html 注入 polyfill 时允许缓冲的最大响应体。
 const HTML_BODY_MAX: usize = 8 * 1024 * 1024;
+/// combo 响应是所有插件脚本的合并体，改写的缓冲上限比单个 HTML 宽一些
+/// （超上限会退回 502，宁可多留些余量）。
+const BUNDLE_BODY_MAX: usize = 32 * 1024 * 1024;
+/// 连接池里空闲连接的存活上限，必须小于上游（Node）的 keepAliveTimeout（默认 5s）。
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::header::{
@@ -27,7 +32,14 @@ use hyper_util::rt::TokioExecutor;
 pub(crate) fn build_client() -> UpstreamClient {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(Duration::from_secs(3)));
-    LegacyClient::builder(TokioExecutor::new()).build(connector)
+    LegacyClient::builder(TokioExecutor::new())
+        // 上游是 Node，其 keepAliveTimeout 默认只有 5 秒，远小于 hyper 池默认的
+        // 90 秒空闲上限：池里缓存的连接会先被上游关掉，而 hyper 仍认为它可用，
+        // 复用时就拿到一个已关闭的连接，表现为成片、随机的 503（页面加载并发建
+        // 好几个连接，坏连接要连着失败几次才被耗尽）。把池的空闲上限压到它之下，
+        // 宁可多握几次手——局域网里这点开销远小于一次失败。
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .build(connector)
 }
 
 /// 网关注入循环：接受连接，每连接跑一个 hyper HTTP/1.1 服务。
@@ -107,9 +119,8 @@ pub(crate) async fn forward_regular(
         .unwrap_or("");
     let is_injectable = status == StatusCode::OK && content_type.contains("text/html");
     // dsh-client-connection 的客户端 bundle：改写 isLoopback 判定（见 rewrite_connection_bundle）。
-    let is_connection_bundle = status == StatusCode::OK
-        && uri_path.contains("/dsh-client-connection/client.js")
-        && content_type.contains("javascript");
+    let is_connection_bundle =
+        status == StatusCode::OK && is_connection_bundle_response(&uri_path, content_type);
 
     // 剥离 framing 头后由 hyper server 重算（注入/改写路径 body 大小会变化；
     // 流式路径避免上游 Connection 头与 hyper 分帧冲突）。
@@ -146,7 +157,7 @@ pub(crate) async fn forward_regular(
             Err(_) => bad_gateway_response(),
         }
     } else if is_connection_bundle {
-        let bytes = match collect_limited(response.into_body(), HTML_BODY_MAX).await {
+        let bytes = match collect_limited(response.into_body(), BUNDLE_BODY_MAX).await {
             Ok(bytes) => bytes,
             Err(_) => return bad_gateway_response(),
         };
