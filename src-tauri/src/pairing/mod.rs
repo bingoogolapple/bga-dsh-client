@@ -474,6 +474,15 @@ async fn handle_request(
         return denied_response(crate::i18n::current(&app));
     }
 
+    // 插件脚本改写未命中会静默降级（局域网端退回「非本机」语义：内测声明反复弹、
+    // 设置不落盘），攒着由这里节流上报——否则只能从页面行为反推。
+    if rewrite::take_rewrite_warning() {
+        push_log(
+            &app,
+            tr(crate::i18n::current(&app), "pair.rewrite_missed_log", &[]),
+        );
+    }
+
     // dsh 0.1.2+ 的 /api 认证：手机浏览器没有上游的会话 cookie，由网关代持并
     // 注入（缓存命中时开销可忽略）。
     let cookie = upstream::ensure_cookie(&app, upstream);

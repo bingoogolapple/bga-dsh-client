@@ -249,6 +249,7 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "pair.upstream_ok_log") => if_en(locale, "Upstream session established: exchanged the dsh launch token for a session cookie", "上游会话已建立：已用 dsh 启动令牌换得会话 cookie"),
         (_, "pair.upstream_fail_log") => if_en(locale, "Cannot establish an upstream session: no dsh launch token available. The service was likely started outside this app (its output never reaches the log), so LAN requests will be answered with 401", "无法建立上游会话：未拿到 dsh 启动令牌。服务多半不是本应用启动的（其输出不进本应用日志），局域网访问会得到 401"),
         (_, "pair.upstream_exchange_fail_log") => if_en(locale, "Cannot establish an upstream session: the token exchange was rejected. The token belongs to a dsh process that has exited, or the service is unreachable; restart the service from this app and retry", "无法建立上游会话：令牌交换被上游拒绝。该令牌属于已退出的 dsh 进程，或服务不可达；请用本应用重启服务后重试"),
+        (_, "pair.rewrite_missed_log") => if_en(locale, "The plugin-script rewrite did not match: dsh likely changed the loopback predicate or the combo layout. LAN clients fall back to non-loopback semantics (the internal-testing notice reappears on every reload and settings stop persisting). Please report this log to the client author", "插件脚本改写未命中：dsh 可能改了 isLoopback 判定表达式或 combo 布局。局域网访问会退回「非本机」语义（内测声明每次刷新都弹、设置改了不落盘）。请把这条日志反馈给客户端作者"),
 
         _ => key,
     }

@@ -489,6 +489,8 @@ impl ServiceManager {
     }
 
     fn stop_inner(&self, handle: &AppHandle) {
+        // 进程令牌随服务下线作废：新进程会打印新令牌，旧的留着没有意义。
+        forget_launch_token(handle);
         self.starting.store(false, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
         let mine_child = crate::state::lock(&self.child).take();
@@ -655,6 +657,10 @@ pub fn start_heartbeat(handle: &AppHandle) {
             }
             if last_up != Some(up) {
                 last_up = Some(up);
+                // 服务下线：进程令牌随之作废（新进程会打印新令牌），不留残余凭据。
+                if !up {
+                    forget_launch_token(&h);
+                }
                 sm.emit_status(&h);
             }
         }
@@ -688,7 +694,8 @@ pub fn start_log_tailer(handle: &AppHandle) {
         let mut buf = [0u8; 8192];
         loop {
             match file.read(&mut buf) {
-                Ok(0) => {}
+                // 令牌脱敏会重写整个日志（变短）：把偏移拉回来，别停在旧位置上。
+                Ok(0) => resync_log_offset(&mut file),
                 Ok(n) => {
                     let mut chunk = std::mem::take(&mut carry);
                     chunk.extend_from_slice(&buf[..n]);
@@ -699,9 +706,12 @@ pub fn start_log_tailer(handle: &AppHandle) {
                                 .trim_end_matches('\r')
                                 .to_string();
                             if !line.is_empty() {
-                                // 新版 dsh 的启动行藏着进程令牌：先留档，再打码广播。
+                                // 新版 dsh 的启动行藏着进程令牌：留档（另存到
+                                // 0600 的令牌文件），再把日志里那行抹掉，最后打码广播。
                                 if let Some(token) = parse_launch_token(&line) {
                                     store_launch_token(&h, token);
+                                    scrub_launch_tokens(&h);
+                                    resync_log_offset(&mut file);
                                 }
                                 // 唯一广播出口：读到的任何新行（子进程输出 / 应用 push_log 行）
                                 // 都从这里 emit，绝不回写文件（回写会形成读→写→读反馈环）。
@@ -876,22 +886,100 @@ pub(crate) fn redact_token(line: &str) -> String {
     out
 }
 
+/// 令牌的落盘位置。
+///
+/// 日志里那行会被打码（进程凭据不该以明文长期留在磁盘上），所以令牌另存于此：
+/// 应用重启后 dsh 可能还是同一个进程，令牌依然有效，没了它网关就换不了会话。
+/// 权限仅当前用户（与 dsh 自己的 `.credentials.yaml` 同级保护）。
+fn launch_token_path(app: &AppHandle) -> PathBuf {
+    files_dir(app).join("launch-token")
+}
+
 /// 记住最新令牌（每次 dsh 进程启动都会变，直接覆盖即可）。
 pub(crate) fn store_launch_token(app: &AppHandle, token: String) {
+    persist_launch_token(app, &token);
     *crate::state::lock(&app.state::<AppState>().dsh_token) = Some(token);
+}
+
+/// 写入令牌文件；Unix 下收紧到 0600。
+fn persist_launch_token(app: &AppHandle, token: &str) {
+    let mut opts = OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    if let Ok(mut f) = opts.open(launch_token_path(app)) {
+        use std::io::Write;
+        let _ = f.write_all(token.as_bytes());
+    }
+}
+
+/// 读回上次记录的令牌（应用重启后 dsh 若未重启，它仍然有效）。
+fn read_persisted_token(app: &AppHandle) -> Option<String> {
+    let raw = std::fs::read_to_string(launch_token_path(app)).ok()?;
+    let token = raw.trim();
+    (!token.is_empty()).then(|| token.to_string())
 }
 
 /// 从历史日志回填令牌：尾随线程只处理本次会话的新增行，而服务可能是上次
 /// 放生的孤儿、或在应用启动前就已经在跑——那行启动输出早就被跳过了。
+///
+/// 优先读令牌文件；没有（旧版本遗留的日志）才去扫日志。
 pub(crate) fn prime_launch_token(app: &AppHandle) {
-    // 扫描整个尾部窗口（512KB）而不是最后几行：服务可能已经跑了很久，那行启动
-    // 输出早被后续的会话日志刷出了小窗口，漏掉它网关就一直拿不到令牌。
-    let token = read_tail(&files_dir(app).join("service.log"), usize::MAX)
-        .iter()
-        .rev()
-        .find_map(|line| parse_launch_token(line));
+    let token = read_persisted_token(app).or_else(|| {
+        // 扫描整个尾部窗口（512KB）而不是最后几行：服务可能已经跑了很久，那行
+        // 启动输出早被后续的会话日志刷出了小窗口，漏掉它网关就一直拿不到令牌。
+        read_tail(&files_dir(app).join("service.log"), usize::MAX)
+            .iter()
+            .rev()
+            .find_map(|line| parse_launch_token(line))
+    });
     if let Some(token) = token {
         store_launch_token(app, token);
+    }
+}
+
+/// 把日志里已经落盘的令牌打成星号。
+///
+/// 令牌是进程凭据，明文摊在日志里不合适；它本身已另存在 `launch-token`（0600），
+/// 所以打码不影响使用。**原地重写**而不是 rename：子进程以追加模式持有该文件
+/// 的句柄，换 inode 会让它继续写旧文件。尾随线程会把读偏移拉回来（见
+/// `resync_log_offset`），所以在它运行期间调用也安全。
+pub(crate) fn scrub_launch_tokens(app: &AppHandle) {
+    let path = files_dir(app).join("service.log");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    if !text.contains("token=") {
+        return;
+    }
+    let scrubbed = redact_token(&text);
+    if scrubbed == text {
+        return;
+    }
+    let _ = std::fs::write(&path, scrubbed.as_bytes());
+}
+
+/// 服务已下线：进程令牌随之作废（下一个进程会打印新令牌），内存与磁盘都不留残余。
+pub(crate) fn forget_launch_token(app: &AppHandle) {
+    *crate::state::lock(&app.state::<AppState>().dsh_token) = None;
+    let _ = std::fs::remove_file(launch_token_path(app));
+}
+
+/// 文件被重写变短后把读偏移拉回有效范围：否则偏移停在旧位置上，之后追加的
+/// 日志永远读不到（`read` 一直返回 0）。
+fn resync_log_offset(file: &mut std::fs::File) {
+    use std::io::Seek;
+    let Ok(pos) = file.stream_position() else {
+        return;
+    };
+    let Ok(len) = file.metadata().map(|m| m.len()) else {
+        return;
+    };
+    if pos > len {
+        let _ = file.seek(SeekFrom::Start(len));
     }
 }
 

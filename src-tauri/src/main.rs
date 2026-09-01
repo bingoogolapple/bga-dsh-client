@@ -384,9 +384,12 @@ fn main() {
             tray::apply_locale(&handle);
             i18n::start_watcher(handle.clone());
 
-            // 服务可能在应用启动前就已在跑（放生的孤儿 / 外部服务）：那行启动
-            // 输出早于本次会话，先从历史日志里把令牌捞回来。
+            // 服务可能在应用启动前就已在跑（放生的孤儿 / 外部服务）：那行启动输出
+            // 早于本次会话，先从令牌文件（或历史日志）里把令牌捞回来；再把日志里
+            // 残留的明文令牌抹掉；最后才启动尾随线程——它会 seek 到文件末尾，
+            // 在此之前改动文件大小是安全的。
             service::prime_launch_token(&handle);
+            service::scrub_launch_tokens(&handle);
             service::start_log_tailer(&handle);
             service::auto_boot(&handle);
             service::start_heartbeat(&handle);

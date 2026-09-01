@@ -12,7 +12,7 @@ use super::forward::forward_regular;
 use super::rewrite::{
     extract_pair_cookie, inject_html_polyfills, is_connection_bundle_response, is_upgrade_request,
     query_has_pair, rewrite_connection_bundle, rewrite_loopback, strip_hop_by_hop,
-    strip_pair_cookie, POLYFILL,
+    strip_pair_cookie, take_rewrite_warning, POLYFILL,
 };
 use super::tunnel::{
     build_raw_request_head, build_upgrade_response, find_head_end, head_starts_101,
@@ -688,6 +688,15 @@ fn is_connection_bundle_matches_combo_entry_exactly() {
         "/plugins/??@deepseek-ai/dsh-client-connection/client.js&rev=abc123",
         "text/html"
     ));
+}
+
+/// 改写未命中不刷屏：告警先攒着，由请求循环按节流间隔上报到 pairing.log
+/// （页面一次加载会请求几十个脚本，不节流会瞬间淹没日志）。
+#[test]
+fn rewrite_miss_is_reported_throttled() {
+    assert!(rewrite_connection_bundle(b"const a = 1;").is_none());
+    // 刚记下未命中，节流窗口内还不该上报。
+    assert!(!take_rewrite_warning());
 }
 
 /// 单文件形式（早期 dsh、或逐块加载的路径）按结尾匹配。

@@ -2,6 +2,9 @@
 //! Host/Origin 重写、hop-by-hop 头剥离、HTML polyfill 与 isLoopback 改写、
 //! 配对会话 Cookie 的提取与剥离。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use hyper::header::{
     HeaderMap, HeaderName, HeaderValue, CONNECTION, CONTENT_LENGTH, COOKIE, HOST, ORIGIN,
     TRANSFER_ENCODING, UPGRADE,
@@ -139,6 +142,35 @@ const CONNECTION_ENTRIES: [&str; 2] = [
     "dsh-client-connection/client.js",
 ];
 
+/// 上次「改写未命中」的时刻（Unix 秒）；0 表示当前没有待上报的告警。
+///
+/// 未命中发生在转发路径上（没有 AppHandle 可写日志），所以先记下时刻，由请求
+/// 处理循环取走并写进 pairing.log——这个坑已经踩过两次，不能只是静默降级。
+static MISSED_AT: AtomicU64 = AtomicU64::new(0);
+/// 同一条告警的节流间隔（秒）：页面一次加载会请求几十个脚本。
+const MISS_WARN_INTERVAL_SECS: u64 = 300;
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 取出一条待上报的「改写未命中」告警（节流），取到后清除标记。
+pub(crate) fn take_rewrite_warning() -> bool {
+    let missed = MISSED_AT.load(Ordering::SeqCst);
+    if missed == 0 {
+        return false;
+    }
+    let now = now_secs();
+    if now.saturating_sub(missed) < MISS_WARN_INTERVAL_SECS {
+        return false;
+    }
+    MISSED_AT.store(0, Ordering::SeqCst);
+    true
+}
+
 /// 这个响应是不是装着 connection 插件脚本（因而值得改写）。
 ///
 /// combo 列表按逗号分隔，必须**整段相等**才算命中——否则
@@ -164,8 +196,9 @@ pub(crate) fn rewrite_connection_bundle(bytes: &[u8]) -> Option<Vec<u8>> {
     let source = std::str::from_utf8(bytes).ok()?;
     if !source.contains(IS_LOOPBACK_EVAL) {
         // dsh 迭代很快，这段表达式一改本网关就会**静默**降级：手机端退回「非本机」
-        // 语义，表现为内测声明每次刷新都弹、设置改了不落盘。留一行进程日志，
-        // 免得下次再从「页面行为不对」反推半天。
+        // 语义，表现为内测声明每次刷新都弹、设置改了不落盘。记下时刻由请求循环
+        // 上报到 pairing.log（同时留一行进程日志，便于开发期定位）。
+        MISSED_AT.store(now_secs(), Ordering::SeqCst);
         eprintln!(
             "DeepSeekHarness: isLoopback pattern not found in the connection bundle; \
              LAN clients fall back to non-loopback semantics"
