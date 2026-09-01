@@ -233,7 +233,7 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "pair.stop_log") => if_en(locale, "Stopped LAN proxy service (paired sessions cleared)", "停止局域网代理服务（已清空已配对会话）"),
         (_, "pair.restart_log") => if_en(locale, "Restarted LAN proxy service (code and paired sessions kept)", "重启局域网代理服务（保留配对码与已配对会话）"),
         (_, "pair.pair_ok_log") => if_en(locale, "Device {0} paired by QR (granted 30 minutes, code rotated)", "设备 {0} 扫码配对成功（已放行 30 分钟，配对码已轮换）"),
-        (_, "pair.deny_log") => if_en(locale, "Blocked unpaired device {0} (403)", "拒绝未配对设备 {0} 的访问（403）"),
+        (_, "pair.deny_log") => if_en(locale, "Blocked unpaired device {0} (403): {1}", "拒绝未配对设备 {0} 的访问（403）：{1}"),
         (_, "pair.regen_log") => if_en(locale, "Regenerated code: {0} (paired sessions cleared)", "重新生成配对码：{0}（已清空已配对会话）"),
         (_, "pair.url_not_ready") => if_en(locale, "Access URL not generated yet, start the LAN proxy service first", "访问链接尚未生成，请先启动局域网代理服务"),
         (_, "pair.qr_not_ready") => if_en(locale, "QR code not generated yet, start the LAN proxy service first", "二维码尚未生成，请先启动局域网代理服务"),

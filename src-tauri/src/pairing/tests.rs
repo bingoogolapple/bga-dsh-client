@@ -527,6 +527,19 @@ async fn probe_gateway_full_chain_to_dsh() {
     assert!(!body.is_empty());
 }
 
+/// PWA 清单这类资源浏览器取它时**不带凭据**，不该被配对门禁拦下；
+/// 但只放行精确路径，不能放宽到任意静态资源。
+#[test]
+fn public_metadata_is_limited_to_the_manifest() {
+    assert!(is_public_metadata("/manifest.webmanifest"));
+    assert!(is_public_metadata("/favicon.ico"));
+    // 门禁保护的对象一个都不能放。
+    assert!(!is_public_metadata("/"));
+    assert!(!is_public_metadata("/api/remote.mux"));
+    assert!(!is_public_metadata("/assets/index-f1v6Ie_B.js"));
+    assert!(!is_public_metadata("/manifest.webmanifest.bak"));
+}
+
 /// 新建的网关处于停止态、端口为 0、会话为空。
 #[test]
 fn fresh_pairing_is_stopped() {

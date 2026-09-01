@@ -145,6 +145,19 @@ pub struct PairingInfo {
     service_up: bool,
 }
 
+/// 无需配对的公开元数据：PWA 清单与站点图标。
+///
+/// 浏览器取 manifest 时按规范**不带凭据**（不会发 cookie），所以配对 cookie 发不
+/// 出去，这种请求永远会被门禁拦下。而这些是纯静态元数据（应用名、图标、主题色），
+/// 既不含会话也不含业务数据——门禁真正保护的是 `/api` 与页面内容。放行它们，
+/// 手机才能「添加到主屏幕」，顺便消掉这条无谓的 403。
+const PUBLIC_METADATA: [&str; 2] = ["/manifest.webmanifest", "/favicon.ico"];
+
+/// 是否属于无需配对的公开元数据。
+fn is_public_metadata(path: &str) -> bool {
+    PUBLIC_METADATA.contains(&path)
+}
+
 /// 单个已配对会话的展示信息。
 #[derive(Serialize, Clone)]
 pub struct SessionInfo {
@@ -399,17 +412,19 @@ async fn handle_request(
     // - ?pair=<code> 命中即签发浏览器会话令牌（一次性——立即作废旧码换新码），
     //   302 + Set-Cookie 跳回首页；
     // - 校验、签发、轮换在同一把锁内完成：并发访问时同一码最多只可能命中一次。
-    let trusted = {
+    // 请求路径（查询串可能带配对码，落日志时只取路径部分）。
+    let target = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str().to_owned())
+        .unwrap_or_else(|| "/".to_owned());
+    let path = target.split('?').next().unwrap_or("/").to_owned();
+    let trusted = is_public_metadata(&path) || {
         let state = app.state::<AppState>();
         let mut p = crate::state::lock(&state.pairing);
 
         // 检查是否包含有效的配对码
-        let target = req
-            .uri()
-            .path_and_query()
-            .map(|pq| pq.as_str())
-            .unwrap_or("/");
-        if query_has_pair(target, &p.code) {
+        if query_has_pair(&target, &p.code) {
             // 签发会话令牌（防碰撞重试），Set-Cookie 随 302 返回浏览器；
             // 白名单从此按 令牌 记，不再按 IP 记（peer 仅作展示元数据）。
             let token = loop {
@@ -463,12 +478,14 @@ async fn handle_request(
         session_ok
     };
     if !trusted {
+        // 带上路径：只看 IP 分不清是「旧配对码被复用」还是「没有凭据的附带请求」，
+        // 两者的性质完全不同。
         push_log(
             &app,
             tr(
                 crate::i18n::current(&app),
                 "pair.deny_log",
-                &[&peer.to_string()],
+                &[&peer.to_string(), &path],
             ),
         );
         return denied_response(crate::i18n::current(&app));
