@@ -16,7 +16,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const HTML_BODY_MAX: usize = 8 * 1024 * 1024;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::header::{HeaderMap, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, ETAG};
+use hyper::header::{
+    HeaderMap, HeaderValue, ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG,
+};
 use hyper::{Method, Request, Response, StatusCode, Uri, Version};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client as LegacyClient;
@@ -119,10 +121,17 @@ pub(crate) async fn forward_regular(
         if is_framing_header(name) {
             continue;
         }
-        if rewritten && (name == CONTENT_ENCODING || name == ETAG) {
+        if rewritten
+            && (name == CONTENT_ENCODING || name == ETAG || name == CACHE_CONTROL)
+        {
             continue;
         }
         resp = resp.header(name, value);
+    }
+    if rewritten {
+        // 改写过的响应内容已经和原资源不一致：URL 没变、etag 又已剥掉，若再让它
+        // 被强缓存，浏览器会一直用改写前的旧副本（表现为手机改好了、电脑还老样子）。
+        resp = resp.header(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
 
     if is_injectable {

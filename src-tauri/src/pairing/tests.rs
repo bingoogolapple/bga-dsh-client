@@ -31,7 +31,7 @@ use hyper::header::{
     HeaderMap, CONNECTION, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, TRANSFER_ENCODING, UPGRADE,
 };
 use hyper::header::{HeaderValue, CONTENT_TYPE, LOCATION, SET_COOKIE};
-use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, ETAG};
+use hyper::header::{ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, ETAG};
 use std::sync::Mutex;
 use hyper::Method;
 use hyper::StatusCode;
@@ -39,9 +39,20 @@ use rewrite::PAIR_COOKIE;
 
 #[test]
 fn rewrite_connection_bundle_turns_is_loopback_true() {
-    let sample = b"const handle = { api, isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname), hostDescription: {} };";
+    // dsh 0.1.2-alpha.3 的实际文本：判定表达式前面还多了一段 ownsHost。
+    let sample = b"const handle = {\n\t\t\tisLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname),\n\t\t\tgeneration: {}\n\t\t};";
     let rewritten = rewrite_connection_bundle(sample).expect("pattern must match");
     let text = String::from_utf8(rewritten).unwrap();
+    assert!(text.contains("isLoopback: transport?.ownsHost === true || true,"));
+    assert!(!text.contains("isLoopbackHostname(pageLocation.hostname)"));
+}
+
+/// 早期 dsh 没有 `transport?.ownsHost === true ||` 这一段，同样要能改写——
+/// 匹配串取的是旧串的子串，两个版本都命中。
+#[test]
+fn rewrite_connection_bundle_supports_older_wording() {
+    let sample = b"const handle = { api, isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname), hostDescription: {} };";
+    let text = String::from_utf8(rewrite_connection_bundle(sample).unwrap()).unwrap();
     assert!(text.contains("isLoopback: true"));
     assert!(!text.contains("isLoopbackHostname(pageLocation.hostname)"));
 }
@@ -671,6 +682,11 @@ async fn rewritten_html_never_claims_compression() {
         headers.get(ETAG).is_none(),
         "改写过的 HTML 不能沿用原 etag: {headers:?}"
     );
+    assert_eq!(
+        headers.get(CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+        Some("no-store"),
+        "改写过的响应不能被缓存（否则一直用改写前的旧副本）: {headers:?}"
+    );
     assert!(body.windows(10).any(|w| w == b"randomUUID"));
 
     let sent = seen.lock().unwrap().clone().expect("上游应收到请求");
@@ -689,6 +705,7 @@ async fn untouched_body_keeps_content_encoding() {
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "application/json")
             .header(CONTENT_ENCODING, "gzip")
+            .header(CACHE_CONTROL, "public, max-age=60")
             .body(Full::new(Bytes::from_static(b"compressed-bytes")))
             .unwrap()
     }))
@@ -704,6 +721,8 @@ async fn untouched_body_keeps_content_encoding() {
 
     let (_, headers, body) = gateway_get(gateway_addr, "/api").await;
     assert_eq!(headers.get(CONTENT_ENCODING).unwrap(), "gzip");
+    // 没改写的响应不该被插手缓存策略。
+    assert_eq!(headers.get(CACHE_CONTROL).unwrap(), "public, max-age=60");
     assert_eq!(body.as_ref(), b"compressed-bytes");
 }
 

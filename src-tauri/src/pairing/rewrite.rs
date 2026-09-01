@@ -116,15 +116,27 @@ pub(crate) fn is_framing_header(name: &HeaderName) -> bool {
 /// 编辑器持久化、设置文档可用、宿主侧打开产物文件可用。
 ///
 /// 该替换只作用于经网关转发的 bundle 副本；桌面直连 127.0.0.1:3080 不受影响。
+///
+/// 只匹配**判定表达式本身**，不匹配 `isLoopback:` 前缀：dsh 0.1.2-alpha.3 的实际
+/// 文本是 `isLoopback: transport?.ownsHost === true || pageLocation === void 0 || …`
+/// （早期版本没有 `transport?.ownsHost === true ||` 这一段）。它是旧串的子串，
+/// 替换成 `true` 后两种版本都恒为真，不必再跟着前缀写法漂移。
 const IS_LOOPBACK_EVAL: &str =
-    "isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname)";
-const IS_LOOPBACK_TRUE: &str = "isLoopback: true";
+    "pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname)";
+const IS_LOOPBACK_TRUE: &str = "true";
 
 /// 改写 connection bundle：命中目标表达式则返回改写后的字节；未命中返回 None，
 /// 由调用方决定回退与告警（升级导致 bundle 形态变化时静默降级）。
 pub(crate) fn rewrite_connection_bundle(bytes: &[u8]) -> Option<Vec<u8>> {
     let source = std::str::from_utf8(bytes).ok()?;
     if !source.contains(IS_LOOPBACK_EVAL) {
+        // dsh 迭代很快，这段表达式一改本网关就会**静默**降级：手机端退回「非本机」
+        // 语义，表现为内测声明每次刷新都弹、设置改了不落盘。留一行进程日志，
+        // 免得下次再从「页面行为不对」反推半天。
+        eprintln!(
+            "DeepSeekHarness: isLoopback pattern not found in the connection bundle; \
+             LAN clients fall back to non-loopback semantics"
+        );
         return None;
     }
     Some(
