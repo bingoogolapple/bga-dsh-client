@@ -478,14 +478,22 @@ async fn handle_request(
         session_ok
     };
     if !trusted {
-        // 带上路径：只看 IP 分不清是「旧配对码被复用」还是「没有凭据的附带请求」，
-        // 两者的性质完全不同。
+        // 带上路径与 UA：只看 IP 分不清是「旧配对码被复用」「不带凭据的浏览器请求
+        // （manifest 之类）」还是「服务端回调」——三者性质完全不同。
+        let ua: String = req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .chars()
+            .take(60)
+            .collect();
         push_log(
             &app,
             tr(
                 crate::i18n::current(&app),
                 "pair.deny_log",
-                &[&peer.to_string(), &path],
+                &[&peer.to_string(), &path, &ua],
             ),
         );
         return denied_response(crate::i18n::current(&app));
