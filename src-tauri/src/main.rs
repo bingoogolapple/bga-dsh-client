@@ -32,6 +32,7 @@ mod version;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tauri::Manager;
 
@@ -57,6 +58,8 @@ pub struct AppState {
     pub tray: Mutex<Option<Arc<TrayMenu>>>,
     /// 局域网扫码配对网关。
     pub pairing: Mutex<Pairing>,
+    /// 新版 dsh 的进程启动令牌（从 service.log 的启动行解析；每个 dsh 进程一变）。
+    pub dsh_token: Mutex<Option<String>>,
     /// 设置页左下角版本信息缓存（磁盘 version-cache.json + 内存渲染快照）。
     /// get_version_info 秒回缓存，后台线程异步完整探测后刷新。
     pub version_cache: Mutex<VersionCache>,
@@ -178,6 +181,35 @@ fn service_stop(app: tauri::AppHandle) {
     app.state::<AppState>().sm.stop(&app);
 }
 
+/// 主窗口要加载的 DSH 地址（是否带启动令牌）。
+///
+/// 新版 dsh 的浏览器接口要用进程启动令牌换会话 cookie（详见 `service::launch_url`）。
+/// 令牌来自子进程 stdout 那行 `dsh web: …?token=…`，它比「服务已就绪」晚 1~3 秒
+/// 才打印，所以本应用刚拉起服务时短等一会儿；外部启动的服务 stdout 不进
+/// service.log，等也没用，直接给裸地址（之前换过的 cookie 通常还在有效期内）。
+#[tauri::command]
+async fn dsh_launch_url(app: tauri::AppHandle) -> String {
+    let state = app.state::<AppState>();
+    // 历史日志回填或尾随线程已经抓到令牌时无需等待。
+    if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
+        return service::launch_url(Some(&token));
+    }
+    if !state.sm.info(&app).mine {
+        return service::launch_url(None);
+    }
+    const TOKEN_WAIT: Duration = Duration::from_secs(6);
+    let deadline = Instant::now() + TOKEN_WAIT;
+    loop {
+        if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
+            return service::launch_url(Some(&token));
+        }
+        if !ServiceManager::is_up() || Instant::now() >= deadline {
+            return service::launch_url(None);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 #[tauri::command]
 fn get_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
@@ -263,6 +295,7 @@ fn main() {
             locale: Mutex::new(Locale::default()),
             tray: Mutex::new(None),
             pairing: Mutex::new(Pairing::new()),
+            dsh_token: Mutex::new(None),
             version_cache: Mutex::new(VersionCache::new()),
         })
         .invoke_handler(tauri::generate_handler![
@@ -279,6 +312,7 @@ fn main() {
             service_start,
             service_restart,
             service_stop,
+            dsh_launch_url,
             get_app_version,
             get_update_info,
             check_for_update,
@@ -350,6 +384,9 @@ fn main() {
             tray::apply_locale(&handle);
             i18n::start_watcher(handle.clone());
 
+            // 服务可能在应用启动前就已在跑（放生的孤儿 / 外部服务）：那行启动
+            // 输出早于本次会话，先从历史日志里把令牌捞回来。
+            service::prime_launch_token(&handle);
             service::start_log_tailer(&handle);
             service::auto_boot(&handle);
             service::start_heartbeat(&handle);

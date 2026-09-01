@@ -16,8 +16,30 @@
   };
 
   const logs = [];
-  let wasRunning = false;
   let errorLogLoaded = false;
+
+  // 服务每次启动都会换一个新的启动令牌，所以地址要每轮都问一次；是否真的
+  // 重新加载由 loadFrame 判断（地址没变就不动，令牌没抓到时不降级）。
+  let frameSeq = 0;
+
+  async function loadFrame() {
+    const seq = ++frameSeq;
+    let url = DSH_URL;
+    try {
+      url = await invoke("dsh_launch_url");
+    } catch (e) {
+      /* Tauri IPC 尚未就绪：退回常量地址。 */
+    }
+    // apply 可能已被更新的调用重新进入（poll 与事件并发），丢弃过期结果。
+    if (seq !== frameSeq) return;
+    const src = els.frame.getAttribute("src") || "";
+    if (src === url) return;
+    // 新地址不带令牌，说明本次启动的令牌还没抓到（或这就是旧版 dsh）。
+    // 此时若页面已经用令牌加载过，就别把它降级成裸地址——保持现状等下一轮，
+    // 免得把好好的会话换成一次 401。
+    if (url.indexOf("?token=") === -1 && src.startsWith(DSH_URL)) return;
+    els.frame.setAttribute("src", url);
+  }
 
   function apply(info) {
     const running = info.state === "running";
@@ -25,16 +47,13 @@
     els.pill.dataset.state = info.state;
 
     if (running) {
-      // 从非运行态进入运行态（含重启服务）时强制重新加载 iframe。
-      if (!wasRunning || els.frame.getAttribute("src") !== DSH_URL) {
-        els.frame.setAttribute("src", DSH_URL);
-      }
-      wasRunning = true;
+      // 每轮都问一次地址：服务重启后令牌会变，页面必须跟着换，否则旧页面
+      // 在 WebSocket 断开后就白屏了。是否真重载由 loadFrame 判断（地址没变就不动）。
+      loadFrame();
       errorLogLoaded = false;
       els.frameWrap.classList.remove("hidden");
       els.splash.classList.add("hidden");
     } else {
-      wasRunning = false;
       els.frameWrap.classList.add("hidden");
       els.frame.setAttribute("src", "about:blank");
       els.splash.classList.remove("hidden");

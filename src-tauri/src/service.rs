@@ -262,6 +262,11 @@ impl ServiceManager {
             return;
         }
 
+        // 令牌每个 dsh 进程一变：先作废上一次的，否则 `dsh_launch_url` 会命中
+        // 缓存、把**已死进程**的令牌拼进 URL（只剩旧 cookie 能兜底，兜不住就 401）。
+        // 清空后该命令会等到本次启动的新令牌出现，超时才退回裸地址。
+        *crate::state::lock(&handle.state::<AppState>().dsh_token) = None;
+
         self.starting.store(true, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
         self.set_detail(
@@ -694,9 +699,16 @@ pub fn start_log_tailer(handle: &AppHandle) {
                                 .trim_end_matches('\r')
                                 .to_string();
                             if !line.is_empty() {
+                                // 新版 dsh 的启动行藏着进程令牌：先留档，再打码广播。
+                                if let Some(token) = parse_launch_token(&line) {
+                                    store_launch_token(&h, token);
+                                }
                                 // 唯一广播出口：读到的任何新行（子进程输出 / 应用 push_log 行）
-                                // 原样 emit，绝不回写文件（回写会形成读→写→读反馈环）。
-                                let _ = h.emit("service-log", &serde_json::json!({ "line": line }));
+                                // 都从这里 emit，绝不回写文件（回写会形成读→写→读反馈环）。
+                                let _ = h.emit(
+                                    "service-log",
+                                    &serde_json::json!({ "line": redact_token(&line) }),
+                                );
                             }
                             start = i + 1;
                         }
@@ -759,6 +771,10 @@ pub(crate) fn files_dir(handle: &AppHandle) -> PathBuf {
 /// 不会整文件读入，避免打开设置页卡顿。
 pub fn read_log_tail(handle: &AppHandle, limit: usize) -> Vec<String> {
     read_tail(&files_dir(handle).join("service.log"), limit)
+        .into_iter()
+        // 失败态会把这批行原样显示在窗口里，令牌不能跟着出去。
+        .map(|line| redact_token(&line))
+        .collect()
 }
 
 /// 通用尾部读取：max 512KB，去首行残片，按行取尾部 `limit` 行。
@@ -796,6 +812,96 @@ pub(crate) fn read_tail(path: &Path, limit: usize) -> Vec<String> {
         .rev()
         .map(String::from)
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// 启动令牌：新版 dsh 的浏览器接口用它换会话 cookie
+// ---------------------------------------------------------------------------
+//
+// dsh 0.1.2 起，Web 接口的 index 与 /api 都要求浏览器会话：启动时打印一行
+// `dsh web: http://127.0.0.1:3080/?token=<43 字符>`，首次访问用该令牌换一枚
+// 绑定 authority 的签名 cookie（默认 30 天有效，跨 dsh 重启仍有效，但令牌
+// 本身每次进程启动都会变）——详见 dsh 的
+// `packages/client/connection/src/browser-auth.ts`。
+//
+// 本模块只做三件事：从日志里认出令牌、把它存起来、以及在任何可能外泄的地方
+// 打码（日志窗口 / 遥测 / 剪贴板）。是否拼接由 `launch_url` 决定。
+
+/// 启动行的固定前缀（`printUrl` 默认开启，web profile 的 patch 里写死为 true）。
+const LAUNCH_LINE_PREFIX: &str = "dsh web: ";
+/// 令牌是 32 字节 base64url（43 字符）；低于此长度的一律视为无关内容。
+const TOKEN_MIN_LEN: usize = 32;
+
+/// 从一行日志里提取启动令牌；不是启动行或格式不符时返回 `None`。
+///
+/// 只认启动行的第一个 URL：`(LAN: …)` 那半行带的是同一个令牌，不该重复解析。
+pub(crate) fn parse_launch_token(line: &str) -> Option<String> {
+    let rest = line.trim_end().strip_prefix(LAUNCH_LINE_PREFIX)?;
+    let url = rest.split_whitespace().next()?;
+    let (_, value) = url.split_once("?token=")?;
+    let token: String = value
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    (token.len() >= TOKEN_MIN_LEN).then_some(token)
+}
+
+/// 把行内所有 `token=<令牌>` 打码。短值（非令牌）保持原样，避免误伤日志内容。
+pub(crate) fn redact_token(line: &str) -> String {
+    const NEEDLE: &str = "token=";
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find(NEEDLE) {
+        let (head, tail) = rest.split_at(at + NEEDLE.len());
+        out.push_str(head);
+        // 令牌只含 ASCII，字符数即字节数。
+        let len = tail
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .count();
+        if len == 0 {
+            // 形如 `token=` 的空值：原样收尾，否则下面的 split_at 会死循环。
+            out.push_str(tail);
+            return out;
+        }
+        let (value, tail) = tail.split_at(len);
+        if len >= TOKEN_MIN_LEN {
+            out.push_str("***");
+        } else {
+            out.push_str(value);
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 记住最新令牌（每次 dsh 进程启动都会变，直接覆盖即可）。
+pub(crate) fn store_launch_token(app: &AppHandle, token: String) {
+    *crate::state::lock(&app.state::<AppState>().dsh_token) = Some(token);
+}
+
+/// 从历史日志回填令牌：尾随线程只处理本次会话的新增行，而服务可能是上次
+/// 放生的孤儿、或在应用启动前就已经在跑——那行启动输出早就被跳过了。
+pub(crate) fn prime_launch_token(app: &AppHandle) {
+    let token = read_tail(&files_dir(app).join("service.log"), 500)
+        .iter()
+        .rev()
+        .find_map(|line| parse_launch_token(line));
+    if let Some(token) = token {
+        store_launch_token(app, token);
+    }
+}
+
+/// 浏览器要打开的地址：有令牌就带上，dsh 会 303 回干净 `/` 并下发 cookie，
+/// 令牌随即从地址栏消失；没有令牌（旧版 dsh、外部服务、日志已轮转）就用裸
+/// 地址——此前换过的 cookie 仍在有效期内时一样能进。
+pub(crate) fn launch_url(token: Option<&str>) -> String {
+    let base = format!("http://127.0.0.1:{DSH_PORT}");
+    match token {
+        Some(t) if !t.is_empty() => format!("{base}/?token={t}"),
+        _ => base,
+    }
 }
 
 /// 从 Dock 启动的应用 PATH 往往只有系统目录，npx/dsh/pnpm 都找不到。
@@ -1142,5 +1248,66 @@ mod tests {
             cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"),
             "cmd: {cmd}"
         );
+    }
+
+    /// 启动行的令牌能被认出来；LAN 那半行带的是同一个令牌，只按第一个 URL 解析。
+    #[test]
+    fn parse_launch_token_reads_first_url() {
+        let token = "62lso3kIv99w0wrfKhnuuOxArUpgoSCI9WwuIw62xuY";
+        let line = format!("dsh web: http://127.0.0.1:3080/?token={token}");
+        assert_eq!(parse_launch_token(&line).as_deref(), Some(token));
+        // 带 LAN 地址时不把括号里的内容也吞进来。
+        let with_lan =
+            format!("dsh web: http://127.0.0.1:3080/?token={token} (LAN: http://10.0.0.2:3080/?token={token})");
+        assert_eq!(parse_launch_token(&with_lan).as_deref(), Some(token));
+    }
+
+    /// 非启动行（含旧版 dsh 的裸地址输出）不产生令牌。
+    #[test]
+    fn parse_launch_token_ignores_other_lines() {
+        assert_eq!(parse_launch_token("dsh web: http://127.0.0.1:3080/"), None);
+        assert_eq!(parse_launch_token("[2026-09-01 17:17:39] 服务已就绪"), None);
+        assert_eq!(parse_launch_token("web-app: listening on 3080"), None);
+    }
+
+    /// 令牌长度不足（被截断/畸形）时宁可不要，也不要拿半个令牌去拼 URL。
+    #[test]
+    fn parse_launch_token_rejects_short_value() {
+        let line = "dsh web: http://127.0.0.1:3080/?token=short";
+        assert_eq!(parse_launch_token(line), None);
+    }
+
+    /// 打码：令牌变成 `***`，其余内容一字不动。
+    #[test]
+    fn redact_token_masks_only_the_token() {
+        let token = "62lso3kIv99w0wrfKhnuuOxArUpgoSCI9WwuIw62xuY";
+        let line = format!("dsh web: http://127.0.0.1:3080/?token={token} (LAN: http://10.0.0.2:3080/?token={token})");
+        let redacted = redact_token(&line);
+        assert!(!redacted.contains(token), "令牌必须被打码: {redacted}");
+        assert_eq!(
+            redacted,
+            "dsh web: http://127.0.0.1:3080/?token=*** (LAN: http://10.0.0.2:3080/?token=***)"
+        );
+        // 无关行原样返回。
+        assert_eq!(redact_token("服务已就绪"), "服务已就绪");
+    }
+
+    /// `token=` 后面没有值（畸形/被截断的行）不能让打码逻辑死循环。
+    #[test]
+    fn redact_token_terminates_on_empty_value() {
+        assert_eq!(redact_token("dsh web: http://x/?token="), "dsh web: http://x/?token=");
+        assert_eq!(redact_token("token="), "token=");
+    }
+
+    /// 有令牌拼带令牌的地址，没有（旧版 dsh / 外部服务）就退回裸地址。
+    #[test]
+    fn launch_url_appends_token_only_when_present() {
+        assert_eq!(
+            launch_url(Some("abc")),
+            format!("http://127.0.0.1:{DSH_PORT}/?token=abc")
+        );
+        assert_eq!(launch_url(None), format!("http://127.0.0.1:{DSH_PORT}"));
+        // 空串等同于没有令牌，不能拼出 `?token=` 这种畸形地址。
+        assert_eq!(launch_url(Some("")), format!("http://127.0.0.1:{DSH_PORT}"));
     }
 }
