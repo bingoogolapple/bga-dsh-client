@@ -69,8 +69,20 @@ if (!existsSync(tarPath)) {
   await verifyNodeSha256(tarPath)
 }
 
-// 2) 解压 Node：清理旧产物但保留 zip 缓存
-console.log('[bundle] 解压 Node…')
+// 2) 解压 Node：已有同版本可执行文件时直接复用，避免只升级 dsh/pnpm 也重复解压。
+const existingNode = IS_WIN ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin', 'node')
+let reuseNode = existsSync(existingNode)
+if (reuseNode) {
+  try {
+    const actual = execFileSync(existingNode, ['--version'], { encoding: 'utf8' }).trim()
+    reuseNode = actual === NODE_VER
+  } catch {
+    reuseNode = false
+  }
+}
+if (reuseNode) console.log(`[bundle] 复用已有 Node ${NODE_VER}`)
+else console.log('[bundle] 解压 Node…')
+if (!reuseNode) {
 for (const f of readdirSync(nodeDir)) {
   if (f === basename(tarPath)) continue
   rmSync(join(nodeDir, f), { recursive: true, force: true })
@@ -92,6 +104,7 @@ if (IS_WIN) {
 
 const nodeBin = IS_WIN ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin', 'node')
 if (!existsSync(nodeBin)) throw new Error('Node 解压失败')
+}
 
 // 3) 可复现安装：提交的 package.json + lockfile 精确锁定 dsh 与 pnpm，npm ci 安装
 const hasLock = existsSync(join(runtimeDir, 'package-lock.json'))

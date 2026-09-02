@@ -14,6 +14,8 @@ cd "$(dirname "$0")/.."
 
 DRY=0
 REBUILD=1
+CHANGED=0
+NODE_CHANGED=0
 CLI_PARTS=()   # 命令行传入的 (kind value) 对
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -70,6 +72,8 @@ apply_node() { # newver
   edit_file README.md          "badge/node-${old//-/--}-"   "badge/node-${new//-/--}-"
   edit_file README.en.md        "badge/node-${old//-/--}-"   "badge/node-${new//-/--}-"
   CUR_NODE="$new"
+  CHANGED=1
+  NODE_CHANGED=1
 }
 
 apply_pnpm() {
@@ -80,6 +84,7 @@ apply_pnpm() {
   edit_file README.md          "badge/pnpm-${old//-/--}-"   "badge/pnpm-${new//-/--}-"
   edit_file README.en.md        "badge/pnpm-${old//-/--}-"   "badge/pnpm-${new//-/--}-"
   CUR_PNPM="$new"
+  CHANGED=1
 }
 
 apply_dsh() {
@@ -90,6 +95,7 @@ apply_dsh() {
   edit_file README.md          "badge/dsh-${old//-/--}-"   "badge/dsh-${new//-/--}-"
   edit_file README.en.md        "badge/dsh-${old//-/--}-"   "badge/dsh-${new//-/--}-"
   CUR_DSH="$new"
+  CHANGED=1
 }
 
 # ---------- 版本选择（联网时给出候选，否则手输） ----------
@@ -193,6 +199,10 @@ for ((i=0; i<${#PAIRS[@]}; i+=2)); do
 done
 
 # ---------- 重建 + 验证 ----------
+if [[ $CHANGED == 0 ]]; then
+  echo "版本没有变化，跳过重建。"
+  exit 0
+fi
 [[ $REBUILD == 0 ]] && { echo "完成（未重建）。下次打包（release.yml 或 build-release.sh）会自动重建并校验。"; git diff --stat; exit 0; }
 
 echo ""
