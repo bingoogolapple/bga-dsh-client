@@ -210,8 +210,8 @@ fn query_has_pair_matches_only_code() {
 
 #[test]
 fn gen_token_is_unique_hex() {
-    let a = gen_token();
-    let b = gen_token();
+    let a = gen_token().unwrap();
+    let b = gen_token().unwrap();
     assert_eq!(a.len(), TOKEN_LEN);
     assert_ne!(a, b);
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));

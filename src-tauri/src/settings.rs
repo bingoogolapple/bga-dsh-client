@@ -37,7 +37,9 @@ impl Settings {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, json).map_err(|e| e.to_string())
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, json).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, path).map_err(|e| e.to_string())
     }
 
     /// 从文件加载；文件不存在或损坏时回退到默认值。

@@ -9,6 +9,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -94,7 +95,10 @@ fn save_cache(handle: &AppHandle, cache: &UpdateCache) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(cache) {
-        let _ = fs::write(path, json);
+        let tmp = path.with_extension("json.tmp");
+        if fs::write(&tmp, json).is_ok() {
+            let _ = fs::rename(tmp, path);
+        }
     }
 }
 
@@ -150,6 +154,9 @@ pub fn info(handle: &AppHandle) -> UpdateInfo {
 
 /// 真正执行一次网络检查（阻塞，需在后台线程调用），完成后写缓存并广播 `update-available`。
 fn check_now(handle: &AppHandle) {
+    static CHECKING: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    let lock = CHECKING.get_or_init(|| std::sync::Mutex::new(()));
+    let Ok(_guard) = lock.try_lock() else { return };
     let mut cache = load_cache(handle);
     let current = handle.package_info().version.to_string();
     let client = reqwest::blocking::Client::builder()

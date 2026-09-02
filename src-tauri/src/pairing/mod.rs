@@ -69,7 +69,7 @@ mod tunnel;
 mod upstream;
 
 use forward::{build_client, forward_regular};
-use http::{denied_response, redirect_home_with_session};
+use http::{bad_gateway_response, denied_response, redirect_home_with_session};
 use net::lan_ipv4;
 use qrcode::{qr_rgba, qr_svg};
 use rewrite::{extract_pair_cookie, is_upgrade_request, query_has_pair};
@@ -172,7 +172,7 @@ impl Pairing {
         Self {
             running: false,
             error: None,
-            code: token::gen_code(),
+            code: token::gen_code().unwrap_or_default(),
             url: String::new(),
             port: 0,
             lan_ip: None,
@@ -424,11 +424,17 @@ async fn handle_request(
         let mut p = crate::state::lock(&state.pairing);
 
         // 检查是否包含有效的配对码
-        if query_has_pair(&target, &p.code) {
+        if !p.code.is_empty() && query_has_pair(&target, &p.code) {
             // 签发会话令牌（防碰撞重试），Set-Cookie 随 302 返回浏览器；
             // 白名单从此按 令牌 记，不再按 IP 记（peer 仅作展示元数据）。
             let token = loop {
-                let t = gen_token();
+                let t = match gen_token() {
+                    Some(t) => t,
+                    None => {
+                        drop(p);
+                        return bad_gateway_response();
+                    }
+                };
                 if !p.sessions.contains_key(&t) {
                     break t;
                 }
