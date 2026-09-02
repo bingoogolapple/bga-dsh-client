@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // 内置运行时版本：全仓唯一定义点（build-release.sh 与 CI 按行提取）。
 // 升版本请用 ./scripts/set-runtime-version.sh。
 const NODE_VER = 'v24.19.0'
-const DSH_VERSION = '0.1.2-alpha.4'
+const DSH_VERSION = '0.1.2-alpha.5'
 const PNPM_VERSION = '11.22.0'
 
 // 交叉捆绑：RUNTIME_TARGET=win32|linux 时在异构主机上为指定平台组装运行时
