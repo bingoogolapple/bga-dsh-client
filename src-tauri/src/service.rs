@@ -990,7 +990,11 @@ pub(crate) fn launch_url(token: Option<&str>) -> String {
     // The Vite dev window uses localhost and dsh's dev flow expects the
     // numeric loopback authority. Production uses tauri.localhost, where the
     // hostname form is required for the SameSite=Strict auth cookie.
-    let host = if cfg!(debug_assertions) { "127.0.0.1" } else { "localhost" };
+    let host = if cfg!(debug_assertions) {
+        "127.0.0.1"
+    } else {
+        "localhost"
+    };
     let base = format!("http://{host}:{DSH_PORT}");
     match token {
         Some(t) if !t.is_empty() => format!("{base}/?token={t}"),
