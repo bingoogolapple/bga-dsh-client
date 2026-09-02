@@ -13,7 +13,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // 升版本请用 ./scripts/set-runtime-version.sh。
 const NODE_VER = 'v24.19.0'
 const DSH_VERSION = '0.1.2-alpha.5'
-const PNPM_VERSION = '11.22.0'
+const PNPM_VERSION = '11.25.0'
 
 // 交叉捆绑：RUNTIME_TARGET=win32|linux 时在异构主机上为指定平台组装运行时
 // （下载对平台 zip/tar.gz + npm --os/--cpu 按目标平台解析 optionalDependencies 与
@@ -35,11 +35,20 @@ const SHASUMS_URL = `https://nodejs.org/dist/${NODE_VER}/SHASUMS256.txt`
 const runtimeRoot = join(root, 'src-tauri', 'resources', 'runtime')
 const nodeDir = join(runtimeRoot, 'nd')
 const runtimeDir = join(runtimeRoot, 'rt')
+const nodeBin = IS_WIN ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin', 'node')
 mkdirSync(nodeDir, { recursive: true })
 mkdirSync(runtimeDir, { recursive: true })
 
-// 1) 下载并校验 Node 官方 SHA-256（已存在的 tarball 也强制复核）
+// 1) 优先复用已有 Node；只有缺失或版本不匹配时才下载/解压。
 const tarPath = join(nodeDir, TARBALL)
+let reuseNode = existsSync(nodeBin)
+if (reuseNode) {
+  try {
+    reuseNode = execFileSync(nodeBin, ['--version'], { encoding: 'utf8' }).trim() === NODE_VER
+  } catch {
+    reuseNode = false
+  }
+}
 async function verifyNodeSha256(file) {
   const sums = await fetch(SHASUMS_URL)
   if (!sums.ok) throw new Error(`SHASUMS 下载失败: ${sums.status}`)
@@ -55,7 +64,7 @@ async function verifyNodeSha256(file) {
   }
   console.log('[bundle] Node SHA-256 校验通过')
 }
-if (!existsSync(tarPath)) {
+if (!reuseNode && !existsSync(tarPath)) {
   console.log(`[bundle] 下载 Node ${NODE_VER} (${PLAT}-${ARCH})… ${URL}`)
   const res = await fetch(URL)
   if (!res.ok || !res.body) throw new Error(`下载失败: ${res.status}`)
@@ -64,22 +73,12 @@ if (!existsSync(tarPath)) {
   await verifyNodeSha256(tmpTar)
   rmSync(tarPath, { force: true })
   renameSync(tmpTar, tarPath)
-} else {
+} else if (!reuseNode) {
   console.log('[bundle] Node tarball 已存在，复核官方 SHASUM…')
   await verifyNodeSha256(tarPath)
 }
 
-// 2) 解压 Node：已有同版本可执行文件时直接复用，避免只升级 dsh/pnpm 也重复解压。
-const existingNode = IS_WIN ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin', 'node')
-let reuseNode = existsSync(existingNode)
-if (reuseNode) {
-  try {
-    const actual = execFileSync(existingNode, ['--version'], { encoding: 'utf8' }).trim()
-    reuseNode = actual === NODE_VER
-  } catch {
-    reuseNode = false
-  }
-}
+// 2) 解压 Node（复用时完全跳过）。
 if (reuseNode) console.log(`[bundle] 复用已有 Node ${NODE_VER}`)
 else console.log('[bundle] 解压 Node…')
 if (!reuseNode) {
@@ -102,7 +101,6 @@ if (IS_WIN) {
   execFileSync('tar', ['-xzf', tarPath, '-C', nodeDir, '--strip-components=1'], { stdio: 'inherit' })
 }
 
-const nodeBin = IS_WIN ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin', 'node')
 if (!existsSync(nodeBin)) throw new Error('Node 解压失败')
 }
 
@@ -163,10 +161,22 @@ if (TARGET === 'win32') {
 }
 
 // 4) 运行时 manifest：受控构建输入
+const previousManifestPath = join(runtimeRoot, 'runtime-manifest.json')
+let nodeSha256 = null
+if (reuseNode && existsSync(previousManifestPath)) {
+  try {
+    nodeSha256 = JSON.parse(readFileSync(previousManifestPath, 'utf8')).nodeSha256 ?? null
+  } catch {
+    nodeSha256 = null
+  }
+}
+if (!nodeSha256) {
+  nodeSha256 = createHash('sha256').update(readFileSync(tarPath)).digest('hex')
+}
 const manifest = {
   nodeVersion: NODE_VER,
   nodeTarball: TARBALL,
-  nodeSha256: createHash('sha256').update(readFileSync(tarPath)).digest('hex'),
+  nodeSha256,
   dshVersion: DSH_VERSION,
   pnpmVersion: PNPM_VERSION,
   platform: TARGET ?? process.platform,

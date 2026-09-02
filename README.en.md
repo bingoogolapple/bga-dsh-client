@@ -3,7 +3,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/bingoogolapple/bga-dsh-client)](../../releases/latest)
 [![Bundled DSH](https://img.shields.io/badge/dsh-0.1.2--alpha.5-4D6BFE)](scripts/bundle-runtime.mjs)
 [![Bundled Node](https://img.shields.io/badge/node-v24.19.0-339933)](scripts/bundle-runtime.mjs)
-[![Bundled pnpm](https://img.shields.io/badge/pnpm-11.22.0-F69220)](scripts/bundle-runtime.mjs)
+[![Bundled pnpm](https://img.shields.io/badge/pnpm-11.25.0-F69220)](scripts/bundle-runtime.mjs)
 [![Build](https://img.shields.io/github/actions/workflow/status/bingoogolapple/bga-dsh-client/release.yml)](../../actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/bingoogolapple/bga-dsh-client)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/bingoogolapple/bga-dsh-client/total)](../../releases/latest)

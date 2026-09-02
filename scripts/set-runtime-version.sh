@@ -207,7 +207,10 @@ fi
 
 echo ""
 echo "==> 重建内置运行时（下载/安装 + 瘦身，需几分钟）…"
-rm -rf src-tauri/resources/runtime
+# 只重建 npm 运行时；保留 nd/ 与旧 manifest，让只升级 dsh/pnpm 时复用已有 Node
+# 并沿用其已记录的 Node SHA-256。
+# Node 版本变化时 bundle-runtime.mjs 会自行校验版本并重新下载/解压。
+rm -rf src-tauri/resources/runtime/rt
 node scripts/bundle-runtime.mjs
 
 echo ""
