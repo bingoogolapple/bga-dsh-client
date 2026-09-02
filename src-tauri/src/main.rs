@@ -190,12 +190,25 @@ fn service_stop(app: tauri::AppHandle) {
 #[tauri::command]
 async fn dsh_launch_url(app: tauri::AppHandle) -> String {
     let state = app.state::<AppState>();
+    // 外部服务的输出不在本应用日志中：即使磁盘上有上一次服务的
+    // token，也不能把它误认为当前服务的 token。旧版 dsh（< 0.1.2-alpha.1）
+    // 没有 token，直接使用裸地址即可。
+    if !state.sm.info(&app).mine {
+        return service::launch_url(None);
+    }
+    // dsh only started printing a browser launch token in 0.1.2-alpha.1.
+    // A pinned 0.1.0/0.1.1 build can never satisfy the wait below, so return
+    // its plain URL immediately when switching between legacy versions.
+    if crate::state::settings(&app)
+        .dsh_version
+        .as_deref()
+        .is_some_and(service::is_legacy_without_launch_token)
+    {
+        return service::launch_url(None);
+    }
     // 历史日志回填或尾随线程已经抓到令牌时无需等待。
     if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
         return service::launch_url(Some(&token));
-    }
-    if !state.sm.info(&app).mine {
-        return service::launch_url(None);
     }
     const TOKEN_WAIT: Duration = Duration::from_secs(6);
     let deadline = Instant::now() + TOKEN_WAIT;

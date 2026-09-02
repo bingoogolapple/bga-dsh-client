@@ -264,8 +264,9 @@ impl ServiceManager {
 
         // 令牌每个 dsh 进程一变：先作废上一次的，否则 `dsh_launch_url` 会命中
         // 缓存、把**已死进程**的令牌拼进 URL（只剩旧 cookie 能兜底，兜不住就 401）。
-        // 清空后该命令会等到本次启动的新令牌出现，超时才退回裸地址。
-        *crate::state::lock(&handle.state::<AppState>().dsh_token) = None;
+        // 清空内存和磁盘旧值；该命令会等到本次启动的新令牌出现，超时才
+        // 退回裸地址，从而兼容没有 token 的旧版 dsh。
+        forget_launch_token(handle);
 
         self.starting.store(true, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
@@ -541,6 +542,10 @@ impl ServiceManager {
     /// 重启服务（停止本应用启动的进程后再启动）。
     pub fn restart(&self, handle: &AppHandle) {
         let h = handle.clone();
+        // The stop→start sequence can finish before the main window's
+        // polling interval observes a non-running state. Notify it explicitly
+        // so a token-less legacy dsh URL is reloaded after version switching.
+        let _ = handle.emit("service-restarting", ());
         std::thread::spawn(move || {
             let state = h.state::<AppState>();
             // 同一把锁内串行 stop→start，避免中间态被并发操作打断。
@@ -1002,6 +1007,11 @@ pub(crate) fn launch_url(token: Option<&str>) -> String {
     }
 }
 
+/// Whether a pinned dsh version predates launch-token support.
+pub(crate) fn is_legacy_without_launch_token(version: &str) -> bool {
+    version.starts_with("0.1.0") || version.starts_with("0.1.1")
+}
+
 /// 从 Dock 启动的应用 PATH 往往只有系统目录，npx/dsh/pnpm 都找不到。
 /// 这里枚举常见的 Node/包管理器 bin 目录，拼成显式 PATH 前缀。
 #[cfg(not(windows))]
@@ -1410,5 +1420,13 @@ mod tests {
         assert_eq!(launch_url(None), format!("http://127.0.0.1:{DSH_PORT}"));
         // 空串等同于没有令牌，不能拼出 `?token=` 这种畸形地址。
         assert_eq!(launch_url(Some("")), format!("http://127.0.0.1:{DSH_PORT}"));
+    }
+
+    #[test]
+    fn launch_token_support_starts_at_012() {
+        assert!(is_legacy_without_launch_token("0.1.0"));
+        assert!(is_legacy_without_launch_token("0.1.1-rc.2"));
+        assert!(!is_legacy_without_launch_token("0.1.2-alpha.1"));
+        assert!(!is_legacy_without_launch_token("0.1.2"));
     }
 }

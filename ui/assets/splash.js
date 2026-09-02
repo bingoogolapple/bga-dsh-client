@@ -22,7 +22,7 @@
   // 重新加载由 loadFrame 判断（地址没变就不动，令牌没抓到时不降级）。
   let frameSeq = 0;
 
-  async function loadFrame() {
+  async function loadFrame(force = false) {
     const seq = ++frameSeq;
     let url = DSH_URL;
     try {
@@ -33,13 +33,35 @@
     // apply 可能已被更新的调用重新进入（poll 与事件并发），丢弃过期结果。
     if (seq !== frameSeq) return;
     const src = els.frame.getAttribute("src") || "";
-    if (src === url) return;
+    if (!force && src === url) return;
     // 新地址不带令牌，说明本次启动的令牌还没抓到（或这就是旧版 dsh）。
     // 此时若页面已经用令牌加载过，就别把它降级成裸地址——保持现状等下一轮，
     // 免得把好好的会话换成一次 401。
-    if (url.indexOf("?token=") === -1 && src.startsWith(DSH_URL)) return;
-    els.frame.setAttribute("src", url);
+    if (!force && url.indexOf("?token=") === -1 && src.startsWith(DSH_URL)) return;
+    // Legacy dsh has no token, so the URL is identical after every restart.
+    // A fragment is not sent to the server, but makes WebView perform a real
+    // navigation instead of reusing the old iframe document/WebSocket.
+    const navigationUrl =
+      force && url.indexOf("?token=") === -1 ? `${url}#dsh-reload=${Date.now()}` : url;
+    els.frame.setAttribute("src", navigationUrl);
   }
+
+  let wasRunning = false;
+  let reloadOnRunning = false;
+
+  function retryFrameLoads() {
+    // Legacy dsh may report running before its HTTP server is ready.
+    for (const delay of [1000, 3000]) {
+      setTimeout(() => {
+        if (wasRunning) loadFrame(true);
+      }, delay);
+    }
+  }
+
+  listen("service-restarting", () => {
+    reloadOnRunning = true;
+    retryFrameLoads();
+  });
 
   function apply(info) {
     const running = info.state === "running";
@@ -49,11 +71,20 @@
     if (running) {
       // 每轮都问一次地址：服务重启后令牌会变，页面必须跟着换，否则旧页面
       // 在 WebSocket 断开后就白屏了。是否真重载由 loadFrame 判断（地址没变就不动）。
-      loadFrame();
+      // Older dsh versions have no launch token, so their URL stays the same
+      // across a service restart. Force a reload when returning to running;
+      // otherwise the iframe can remain on the disconnected old page and show
+      // a blank content area after switching dsh versions.
+      const enteringRunning = !wasRunning || reloadOnRunning;
+      loadFrame(enteringRunning);
+      reloadOnRunning = false;
+      wasRunning = true;
+      if (enteringRunning) retryFrameLoads();
       errorLogLoaded = false;
       els.frameWrap.classList.remove("hidden");
       els.splash.classList.add("hidden");
     } else {
+      wasRunning = false;
       els.frameWrap.classList.add("hidden");
       els.frame.setAttribute("src", "about:blank");
       els.splash.classList.remove("hidden");
