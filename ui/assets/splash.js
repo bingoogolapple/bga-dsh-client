@@ -48,19 +48,30 @@
 
   let wasRunning = false;
   let reloadOnRunning = false;
+  let restartInProgress = false;
+  let frameRetryTimers = [];
+
+  els.frame.addEventListener("load", () => {
+    for (const timer of frameRetryTimers) clearTimeout(timer);
+    frameRetryTimers = [];
+  });
 
   function retryFrameLoads() {
     // Legacy dsh may report running before its HTTP server is ready.
     for (const delay of [1000, 3000]) {
-      setTimeout(() => {
-        if (wasRunning) loadFrame(true);
-      }, delay);
+      frameRetryTimers.push(
+        setTimeout(() => {
+          if (wasRunning) loadFrame(true);
+        }, delay),
+      );
     }
   }
 
   listen("service-restarting", () => {
     reloadOnRunning = true;
-    retryFrameLoads();
+    restartInProgress = true;
+    for (const timer of frameRetryTimers) clearTimeout(timer);
+    frameRetryTimers = [];
   });
 
   function apply(info) {
@@ -78,6 +89,7 @@
       const enteringRunning = !wasRunning || reloadOnRunning;
       loadFrame(enteringRunning);
       reloadOnRunning = false;
+      restartInProgress = false;
       wasRunning = true;
       if (enteringRunning) retryFrameLoads();
       errorLogLoaded = false;
@@ -85,6 +97,10 @@
       els.splash.classList.add("hidden");
     } else {
       wasRunning = false;
+      // During an explicit restart keep the old document visible until the
+      // replacement service is ready. Clearing the iframe here causes a
+      // visible blank flash, especially with slower legacy dsh versions.
+      if (restartInProgress) return;
       els.frameWrap.classList.add("hidden");
       els.frame.setAttribute("src", "about:blank");
       els.splash.classList.remove("hidden");
