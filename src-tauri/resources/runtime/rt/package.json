@@ -2,7 +2,7 @@
   "name": "dsh-client-runtime",
   "private": true,
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.2-alpha.3",
+    "@deepseek-ai/dsh": "0.1.2-alpha.4",
     "pnpm": "11.22.0"
   }
 }
