@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::i18n::{tr, Locale};
-use crate::service::DSH_PORT;
 use crate::AppState;
 
 /// 一个工具链的三件套版本。
@@ -219,53 +218,7 @@ fn sys_version(cmd: &str, _extra_path: Option<&str>) -> Option<String> {
     )
 }
 
-/// 探测运行中服务的真实版本：POST /api/host.describe（127.0.0.1:DSH_PORT）。
-/// 离线 / 超时 / 非本协议响应一律返回 None（前端回退到 PATH / 内置探测）。
-/// 服务端在 host.describe 中自报 @deepseek-ai/dsh 包的版本，因此 npx 拉起的
-/// 服务也能拿到真实运行版本，而不是 PATH 上未必存在的 dsh 探测值。
-/// 重启后服务可能尚未就绪，最多重试 3 次（每次间隔 2 秒），避免立即 fallback
-/// 到 npx 缓存中的旧版本。
-fn running_dsh_version() -> Option<String> {
-    for attempt in 0..3 {
-        if attempt > 0 {
-            std::thread::sleep(Duration::from_secs(2));
-        }
-        if let Some(v) = try_running_dsh_version() {
-            return Some(v);
-        }
-    }
-    None
-}
-
-/// 单次 host.describe 探测。
-fn try_running_dsh_version() -> Option<String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .ok()?;
-    let body = serde_json::json!({
-        "type": "client-request",
-        "rpcId": "version-probe",
-        "method": "host.describe",
-        "payload": {},
-    });
-    let resp: serde_json::Value = client
-        .post(format!("http://127.0.0.1:{DSH_PORT}/api/host.describe"))
-        .json(&body)
-        .send()
-        .ok()?
-        .json()
-        .ok()?;
-    let version = resp.get("result")?.get("value")?.get("version")?.as_str()?;
-    // 旧构建的占位符（0.0.1）不代表真实版本，忽略并回退到 PATH / 内置探测。
-    if version == "0.0.1" {
-        return None;
-    }
-    Some(version.to_owned())
-}
-
-/// 兜底探测：host.describe 查不到版本（旧版服务返回 0.0.1 占位符 / 探测失败）时，
-/// 直接从应用自己的 npx 缓存目录读取 @deepseek-ai/dsh 包的版本。
+/// npx 模式从应用自己的缓存目录读取 @deepseek-ai/dsh 包的版本。
 /// npx 拉起的服务其包就躺在 <files_dir>/npm-cache/_npx/<hash>/node_modules/
 /// @deepseek-ai/dsh/package.json 里，缓存里的版本即实际拉起服务的那个包的版本。
 /// 遍历全部缓存目录取 mtime 最新的（防止读到历史残留的旧包）。
@@ -303,10 +256,14 @@ fn npx_cached_dsh_version(app: &AppHandle) -> Option<String> {
             best = Some((mtime, version.to_owned()));
         }
     }
-    best.map(|(_, v)| v)
+    let result = best.map(|(_, v)| v);
+    app.state::<AppState>()
+        .sm
+        .push_log(app, format!("[version-probe] npx cache version={result:?}"));
+    result
 }
 
-/// 完整探测一次版本信息（7 个探测并行），返回 VersionInfo。
+/// 完整探测一次版本信息（6 个探测并行），返回 VersionInfo。
 /// 该函数只做探测不写缓存，供后台线程与启动遥测复用。
 pub fn probe_versions(app: &AppHandle) -> VersionInfo {
     // 内置运行时入口（node 可执行 + dsh 的 bin.js；pnpm 走 pnpm.cjs，均用内置 node 直跑，跨平台安全）
@@ -344,8 +301,8 @@ pub fn probe_versions(app: &AppHandle) -> VersionInfo {
         }
     };
 
-    // 七个探测并行跑（<1s 返回），互不阻塞
-    let (r_node, r_pnpm, r_dsh, s_node, s_pnpm, s_dsh, running) = std::thread::scope(|s| {
+    // 六个探测并行跑（<1s 返回），互不阻塞
+    let (r_node, r_pnpm, r_dsh, s_node, s_pnpm, s_dsh) = std::thread::scope(|s| {
         let rn = s.spawn(|| match &node_bin {
             Some(b) => run_capture(b, &[OsStr::new("--version")], PROBE_TIMEOUT, None),
             None => None,
@@ -380,7 +337,6 @@ pub fn probe_versions(app: &AppHandle) -> VersionInfo {
         let sp = s.spawn(|| sys_version("pnpm", None));
         #[cfg(windows)]
         let sd = s.spawn(|| sys_version("dsh", None));
-        let rv = s.spawn(running_dsh_version);
         (
             rn.join().unwrap_or(None),
             rp.join().unwrap_or(None),
@@ -388,30 +344,32 @@ pub fn probe_versions(app: &AppHandle) -> VersionInfo {
             sn.join().unwrap_or(None),
             sp.join().unwrap_or(None),
             sd.join().unwrap_or(None),
-            rv.join().unwrap_or(None),
         )
     });
 
     let service_up = crate::service::ServiceManager::is_up();
+    let service_mine = app.state::<AppState>().sm.info(app).mine
+        || crate::state::lock(&app.state::<AppState>().dsh_token).is_some();
     // 用户显式选定的版本（dsh_version）：下载版/内置版都在 settings 里标记，
     // 它正是实际拉起的服务版本。
     let pinned = crate::state::settings(app).dsh_version.clone();
-    // host.describe 查不到版本（旧版服务返回 0.0.1 占位符 / 探测失败）但服务在线时兜底：
-    // - 用户显式选定了版本（无论内置还是下载版）→ 优先用该版本，它即实际运行版本；
-    //   不能回退到 npx 缓存——npx 缓存是普通版 npx 拉起的包，与用户选定的下载/内置版无关，
-    //   否则会显示切换前的旧 npx 版本（左下角 dsh 版本错乱）。
-    // - 未选定版本（普通版走 npx）→ 才回退到应用自己的 npx 缓存目录读取。
-    let running = running.or_else(|| {
-        if service_up {
+    // 服务在线时确定 dsh 的实际来源：固定版本 > bundled manifest > npx 缓存。
+    let bundled_dsh = crate::dsh::builtin_dsh_version(app);
+    let running = {
+        if service_up && service_mine {
             if let Some(ref pv) = pinned {
                 Some(pv.clone())
+            } else if let Some(ref bv) = bundled_dsh {
+                // bundled 默认模式没有 settings.dsh_version；服务探测失败时
+                // 必须回退到内置 manifest，而不能读普通版 npx 缓存中的旧版本。
+                Some(bv.clone())
             } else {
                 npx_cached_dsh_version(app)
             }
         } else {
             None
         }
-    });
+    };
 
     let miss = tr(i18n_current(app), "ver.not_installed", &[]).to_string();
     VersionInfo {
@@ -473,16 +431,19 @@ pub fn force_refresh_version_info(app: AppHandle) -> VersionInfo {
     // 避免 host.describe 探测稍慢/失败时，左下角先显示缓存里切换前的旧版本。
     let pinned = crate::state::settings(&app).dsh_version.clone();
     let service_up = crate::service::ServiceManager::is_up();
+    let service_mine = app.state::<AppState>().sm.info(&app).mine
+        || crate::state::lock(&app.state::<AppState>().dsh_token).is_some();
 
     if let Some(mut cached) = load_version_cache(&app) {
         // 修正 service_up：缓存可能是服务 down 时探测的，现在服务已重启，需实时检测。
         cached.service_up = service_up;
-        // 选定版本且服务在线时，直接以该版本作为运行版本（探测兜底用，见 probe_versions）。
-        if let Some(ref pv) = pinned {
-            if service_up {
-                cached.running = Some(pv.clone());
-            }
-        } else if !service_up {
+        // 服务在线时立即修正运行版本，避免重启后先展示旧缓存，等待后台探测。
+        if service_up && service_mine {
+            cached.running = pinned
+                .clone()
+                .or_else(|| crate::dsh::builtin_dsh_version(&app))
+                .or_else(|| npx_cached_dsh_version(&app));
+        } else {
             cached.running = None;
         }
         try_probe_async(&app, true);

@@ -1,6 +1,6 @@
 {
   "name": "bga-dsh-client",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "description": "DSH Web GUI 的 Tauri 桌面壳：自动探测/拉起 dsh 服务、托盘常驻、局域网代理配对访问（内置 Node 版 / 依赖系统 npx 版）",
   "scripts": {

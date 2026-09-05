@@ -180,7 +180,7 @@ impl ServiceManager {
         *crate::state::lock(&self.detail) = text;
     }
 
-    fn push_log(&self, handle: &AppHandle, line: String) {
+    pub(crate) fn push_log(&self, handle: &AppHandle, line: String) {
         use std::io::Write;
         let line = format!("{} {line}", now_ts());
         // 只落盘，不 emit：实时广播统一由 start_log_tailer 读文件后发出——

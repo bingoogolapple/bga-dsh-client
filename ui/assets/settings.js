@@ -344,10 +344,10 @@
   listen("pairing-log", (e) => pairLog.append(String((e.payload && e.payload.line) || "")));
 
   // ---------- 侧边栏工具版本（node/pnpm/dsh） ----------
-  // dsh：服务在线时优先展示运行中服务自报的真实版本（npx 拉起的也能拿到）；
-  // 服务在线但查不到版本（旧版服务 host.describe 返回占位符/探测失败）时展示
-  // 「版本未知」，避免误导成「未安装」；否则内置包展示内置 runtime 版本、
-  // 非内置包展示系统 PATH 生效版本。
+  // dsh：服务在线时优先展示后端根据实际启动来源推断的运行版本；
+  // 无法判断时展示「版本未知」，避免误导成「未安装」。
+  // Node/pnpm 展示客户端对应的 bundled runtime 或系统 PATH 版本；
+  // 外部服务的 Node/pnpm 版本无法由当前协议可靠获取。
   // 展示流程：打开即渲染后端返回的缓存结果（秒回，不阻塞窗口），后端后台线程
   // 重新完整探测后 emit `version-refreshed`，此处刷新为新值。
   function renderVersions(v) {
