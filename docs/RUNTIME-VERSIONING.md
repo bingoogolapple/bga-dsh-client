@@ -8,7 +8,7 @@
 | 组件 | 当前默认版本 | 作用 |
 |---|---|---|
 | Node.js | `v24.20.0` | 执行 dsh 的运行时（`runtime/nd/bin/node`） |
-| @deepseek-ai/dsh | `0.1.2-alpha.5` | DSH 本体（`runtime/rt/node_modules/…/lib/bin.js`） |
+| @deepseek-ai/dsh | `0.1.2-rc.1` | DSH 本体（`runtime/rt/node_modules/…/lib/bin.js`） |
 | pnpm | `11.25.0` | 供 dsh 的 `dsh plugin` 命令转发调用（插件管理） |
 
 > 三者是**相互独立的版本链**，可分别升级；非内置版（plain）不携带任何运行时，

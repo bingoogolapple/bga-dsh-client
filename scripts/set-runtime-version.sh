@@ -200,8 +200,37 @@ done
 
 # ---------- 重建 + 验证 ----------
 if [[ $CHANGED == 0 ]]; then
-  echo "版本没有变化，跳过重建。"
-  exit 0
+  # 版本源没变化也不能直接跳过：上次下载/安装可能中途失败，导致实际
+  # runtime 仍是旧版本或不完整。检查通过才跳过，否则继续重建。
+  runtime_is_current() {
+    local mf="src-tauri/resources/runtime/runtime-manifest.json"
+    [[ -f "$mf" ]] || return 1
+    node - "$mf" "$CUR_NODE" "$CUR_DSH" "$CUR_PNPM" <<'EOF'
+const fs = require('fs')
+const path = require('path')
+const [manifestPath, nodeVersion, dshVersion, pnpmVersion] = process.argv.slice(2)
+try {
+  const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  const root = path.dirname(manifestPath)
+  const isWin = process.platform === 'win32'
+  const nodeBin = path.join(root, 'nd', isWin ? 'node.exe' : 'bin/node')
+  const dshBin = path.join(root, 'rt', 'node_modules', '.bin', isWin ? 'dsh.cmd' : 'dsh')
+  const pnpmBin = path.join(root, 'rt', 'node_modules', '.bin', isWin ? 'pnpm.cmd' : 'pnpm')
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'rt', 'package.json'), 'utf8'))
+  const deps = pkg.dependencies || {}
+  if (m.nodeVersion !== nodeVersion || m.dshVersion !== dshVersion || m.pnpmVersion !== pnpmVersion) process.exit(1)
+  if (!fs.existsSync(nodeBin) || !fs.existsSync(dshBin) || !fs.existsSync(pnpmBin)) process.exit(1)
+  if (deps['@deepseek-ai/dsh'] !== dshVersion || deps.pnpm !== pnpmVersion) process.exit(1)
+} catch {
+  process.exit(1)
+}
+EOF
+  }
+  if runtime_is_current; then
+    echo "版本没有变化且 runtime 完整，跳过重建。"
+    exit 0
+  fi
+  echo "版本没有变化，但 runtime 缺失或版本不一致，继续重建。"
 fi
 [[ $REBUILD == 0 ]] && { echo "完成（未重建）。下次打包（release.yml 或 build-release.sh）会自动重建并校验。"; git diff --stat; exit 0; }
 
