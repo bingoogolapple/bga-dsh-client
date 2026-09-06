@@ -39,7 +39,7 @@ use tauri::Manager;
 use crate::dsh::{
     dsh_active_version, dsh_delete_version, dsh_download_version, dsh_get_registry,
     dsh_list_versions, dsh_maybe_refresh_remote_versions, dsh_refresh_remote_versions,
-    dsh_set_active_version, dsh_set_registry,
+    dsh_set_active_version, dsh_set_registry, dsh_switch_active_version,
 };
 use crate::i18n::Locale;
 use crate::pairing::Pairing;
@@ -347,6 +347,7 @@ fn main() {
             dsh_download_version,
             dsh_delete_version,
             dsh_set_active_version,
+            dsh_switch_active_version,
             dsh_active_version,
             dsh_set_registry,
             dsh_get_registry,

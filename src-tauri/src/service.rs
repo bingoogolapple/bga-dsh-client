@@ -7,10 +7,10 @@
 //! - 停止/重启按进程组整棵结束；退出应用时按设置决定 停止 或 放生（detach）。
 
 use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -87,6 +87,9 @@ pub enum ServiceState {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub struct ServiceInfo {
+    /// Monotonically increasing event generation. Consumers can ignore stale
+    /// events that arrive after a newer snapshot (for example after a restart).
+    pub revision: u64,
     pub state: ServiceState,
     /// 是否由本应用启动（含上次退出放生、本次接管的服务；外部服务只复用、不管理）。
     pub mine: bool,
@@ -104,6 +107,7 @@ pub struct ServiceManager {
     starting: AtomicBool,
     /// 本应用最近一次启动失败标记（向前端暴露 error 状态，从而展示失败日志）。
     failed: AtomicBool,
+    revision: AtomicU64,
     detail: Mutex<String>,
     /// 服务生命周期操作互斥锁：start/stop/restart 整体串行化，
     /// 避免快速连续操作并发交错（二次 start 覆盖 child 泄漏进程等竞态）。
@@ -117,18 +121,39 @@ impl ServiceManager {
             orphan: Mutex::new(None),
             starting: AtomicBool::new(false),
             failed: AtomicBool::new(false),
+            revision: AtomicU64::new(0),
             detail: Mutex::new(String::new()),
             lifecycle: Mutex::new(()),
         }
     }
 
-    /// 探测 127.0.0.1:3080 上是否有监听。
+    /// 探测 DSH 的应用层是否可响应。
+    ///
+    /// 单纯连接 TCP 端口会把启动中的半成品进程、端口探针甚至其他程序
+    /// 误判为 DSH。读取 HTTP 状态行可以保留 401/404 等有效应用响应，
+    /// 同时排除只监听端口但还没有真正提供 Web 服务的进程。
     pub fn is_up() -> bool {
-        std::net::TcpStream::connect_timeout(
+        let Ok(mut stream) = std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], DSH_PORT)),
             Duration::from_millis(400),
-        )
-        .is_ok()
+        ) else {
+            return false;
+        };
+        let timeout = Duration::from_millis(700);
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
+        if stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:3080\r\nConnection: close\r\n\r\n")
+            .is_err()
+        {
+            return false;
+        }
+        let mut buf = [0_u8; 256];
+        let Ok(n) = stream.read(&mut buf) else {
+            return false;
+        };
+        let head = String::from_utf8_lossy(&buf[..n]);
+        head.starts_with("HTTP/1.") && head.as_bytes().get(8) == Some(&b' ')
     }
 
     /// 当前服务信息（供命令与事件共用）。
@@ -138,7 +163,16 @@ impl ServiceManager {
         // 用户点击任何菜单都崩溃（详见 state 模块文档）。
         let child = crate::state::lock(&self.child);
         let orphan = *crate::state::lock(&self.orphan);
-        let mine = starting || child.is_some() || orphan.is_some();
+        // Treat a verifiable DSH listener as manageable even when it was started
+        // outside this process; unknown port owners remain external/read-only.
+        let external_pid = if child.is_none() && orphan.is_none() && Self::is_up() {
+            // Expose the listener as manageable in the UI; stop_inner still
+            // performs the stricter DSH identity check before sending signals.
+            port_listener_pid()
+        } else {
+            None
+        };
+        let mine = starting || child.is_some() || orphan.is_some() || external_pid.is_some();
         let state = if starting {
             ServiceState::Starting
         } else if child.is_some() || Self::is_up() {
@@ -158,9 +192,10 @@ impl ServiceManager {
             LaunchMethod::Npx.display(crate::i18n::current(handle))
         };
         ServiceInfo {
+            revision: self.revision.load(Ordering::SeqCst),
             state,
             mine,
-            pid: child.as_ref().map(|c| c.id()).or(orphan),
+            pid: child.as_ref().map(|c| c.id()).or(orphan).or(external_pid),
             method,
             detail: crate::state::lock(&self.detail).clone(),
         }
@@ -177,6 +212,7 @@ impl ServiceManager {
         {
             let _ = writeln!(f, "{line}");
         }
+        trim_live_log(&files_dir(handle).join("service.log"), 5 * 1024 * 1024);
         *crate::state::lock(&self.detail) = text;
     }
 
@@ -193,9 +229,11 @@ impl ServiceManager {
         {
             let _ = writeln!(f, "{line}");
         }
+        trim_live_log(&files_dir(handle).join("service.log"), 5 * 1024 * 1024);
     }
 
     fn emit_status(&self, handle: &AppHandle) {
+        self.revision.fetch_add(1, Ordering::SeqCst);
         let info = self.info(handle);
         let _ = handle.emit("service-status", &info);
         // 状态变更同步刷新托盘菜单可用性（切到主线程改，避免 macOS 菜单线程问题）。
@@ -239,8 +277,9 @@ impl ServiceManager {
             return;
         }
         // 上次退出放生的服务仍在运行：接管，继续管理。
-        if let Some(pid) = *crate::state::lock(&self.orphan) {
-            if process_alive(pid) {
+        let orphan_pid = *crate::state::lock(&self.orphan);
+        if let Some(pid) = orphan_pid {
+            if process_alive(pid) && process_is_dsh(pid) {
                 self.finish(
                     handle,
                     tr(
@@ -267,6 +306,44 @@ impl ServiceManager {
         // 清空内存和磁盘旧值；该命令会等到本次启动的新令牌出现，超时才
         // 退回裸地址，从而兼容没有 token 的旧版 dsh。
         forget_launch_token(handle);
+
+        // Settings may have been edited or restored from an older version of the
+        // app.  Never pass an unchecked value into a shell command: besides
+        // producing a confusing "service exited" error, a malformed pinned
+        // version could escape the versions directory.  Fail before changing
+        // lifecycle state so the user can recover by selecting the default
+        // version in Settings.
+        if let Some(ref ver) = crate::state::settings(handle).dsh_version {
+            if semver::Version::parse(ver.trim_start_matches('v')).is_err()
+                || ver.contains('/')
+                || ver.contains('\\')
+                || ver.contains("..")
+            {
+                self.failed.store(true, Ordering::SeqCst);
+                self.finish(
+                    handle,
+                    tr(crate::i18n::current(handle), "svc.invalid_version", &[ver]),
+                );
+                return;
+            }
+            let installed = crate::dsh::dsh_versions_dir(handle)
+                .join(ver)
+                .join("node_modules/@deepseek-ai/dsh/lib/bin.js")
+                .is_file();
+            let builtin = crate::dsh::builtin_dsh_version(handle).as_deref() == Some(ver.as_str());
+            if !installed && !builtin {
+                self.failed.store(true, Ordering::SeqCst);
+                self.finish(
+                    handle,
+                    tr(
+                        crate::i18n::current(handle),
+                        "svc.version_unavailable",
+                        &[ver],
+                    ),
+                );
+                return;
+            }
+        }
 
         self.starting.store(true, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
@@ -441,9 +518,11 @@ impl ServiceManager {
                 if guard.as_ref().map(|c| c.id()) != Some(my_pid) {
                     return; // 已被 stop() 接管清理
                 }
-                match guard.as_mut().unwrap().try_wait() {
+                let result = guard.as_mut().unwrap().try_wait();
+                match result {
                     Ok(Some(_)) => {
                         guard.take();
+                        drop(guard);
                         if Self::is_up() {
                             // dsh 服务仍在线：npx 壳退出了，服务变成孤儿。用端口反查真实
                             // 服务 PID 记入 orphan，本次会话内仍可停止/重启，下次启动走接管分支。
@@ -470,6 +549,7 @@ impl ServiceManager {
                     Ok(None) => {}
                     Err(_) => {
                         guard.take();
+                        drop(guard);
                         sm.clear_pid(&h);
                         return;
                     }
@@ -519,10 +599,21 @@ impl ServiceManager {
             self.finish(handle, tr(crate::i18n::current(handle), "svc.stopped", &[]));
             crate::telemetry::capture_event("service_stopped", None);
         } else if Self::is_up() {
-            self.finish(
-                handle,
-                tr(crate::i18n::current(handle), "svc.external_no_stop", &[]),
-            );
+            // 外部启动但可确认是 DSH 的实例也纳入管理；普通占端口程序仍不操作。
+            if let Some(pid) = port_listener_pid().filter(|&pid| process_is_dsh(pid)) {
+                self.set_detail(
+                    handle,
+                    tr(crate::i18n::current(handle), "svc.stopping", &[]),
+                );
+                kill_group(pid);
+                self.wait_port_free();
+                self.finish(handle, tr(crate::i18n::current(handle), "svc.stopped", &[]));
+            } else {
+                self.finish(
+                    handle,
+                    tr(crate::i18n::current(handle), "svc.external_no_stop", &[]),
+                );
+            }
         } else {
             self.finish(
                 handle,
@@ -583,7 +674,12 @@ impl ServiceManager {
     }
 
     fn write_pid(&self, handle: &AppHandle, pid: u32) {
-        let _ = std::fs::write(self.pid_path(handle), pid.to_string());
+        // Persist a small identity record instead of a bare PID.  PIDs are
+        // routinely reused after a restart, so ownership must include the
+        // observed command line as well as liveness.
+        let command = process_command(pid).unwrap_or_default();
+        let record = serde_json::json!({ "pid": pid, "command": command });
+        let _ = std::fs::write(self.pid_path(handle), record.to_string());
     }
 
     fn clear_pid(&self, handle: &AppHandle) {
@@ -591,9 +687,17 @@ impl ServiceManager {
     }
 
     fn read_pid(&self, handle: &AppHandle) -> Option<u32> {
-        std::fs::read_to_string(self.pid_path(handle))
+        let text = std::fs::read_to_string(self.pid_path(handle)).ok()?;
+        if let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) {
+            let pid = record.get("pid")?.as_u64()? as u32;
+            let saved = record.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            return (process_alive(pid) && process_identity_matches(pid, saved)).then_some(pid);
+        }
+        // Accept legacy files once, but still require a DSH command line.
+        text.trim()
+            .parse::<u32>()
             .ok()
-            .and_then(|s| s.trim().parse().ok())
+            .filter(|&pid| process_alive(pid) && process_is_dsh(pid))
     }
 }
 
@@ -607,7 +711,10 @@ pub fn auto_boot(handle: &AppHandle) {
         let sm = &state.sm;
         let detection;
         if ServiceManager::is_up() {
-            match sm.read_pid(&h).filter(|&pid| process_alive(pid)) {
+            match sm
+                .read_pid(&h)
+                .filter(|&pid| process_alive(pid) && process_is_dsh(pid))
+            {
                 Some(pid) => {
                     *crate::state::lock(&sm.orphan) = Some(pid);
                     sm.set_detail(
@@ -653,7 +760,7 @@ pub fn start_heartbeat(handle: &AppHandle) {
             // 放生/接管的孤儿服务已退出（进程死或端口已释放）时清理孤儿 PID 记录，
             // 避免前端一直显示「本应用管理 + 陈旧 PID」，也避免下次启动被误判为接管。
             let orphan_gone = match *crate::state::lock(&sm.orphan) {
-                Some(pid) => !up || !process_alive(pid),
+                Some(pid) => !up || !process_alive(pid) || !process_is_dsh(pid),
                 None => false,
             };
             if orphan_gone {
@@ -756,6 +863,12 @@ pub(crate) fn now_ts() -> String {
 /// 最多保留两份旧档）；service.log 与 pairing.log 共用。无定时任务，时点=启动时。
 pub(crate) fn rotate_logs(app: &AppHandle, max: u64) {
     for name in ["service.log", "pairing.log"] {
+        // service.log may still be open by a detached DSH process. Rotating it
+        // would move the live inode to .1 and make the new tailer appear dead.
+        // pairing.log is owned by this process and can always be rotated.
+        if name == "service.log" && ServiceManager::is_up() {
+            continue;
+        }
         let dir = files_dir(app);
         let path = dir.join(name);
         let Ok(meta) = std::fs::metadata(&path) else {
@@ -767,6 +880,35 @@ pub(crate) fn rotate_logs(app: &AppHandle, max: u64) {
         let _ = std::fs::remove_file(dir.join(format!("{name}.2")));
         let _ = std::fs::rename(dir.join(format!("{name}.1")), dir.join(format!("{name}.2")));
         let _ = std::fs::rename(&path, dir.join(format!("{name}.1")));
+    }
+}
+
+/// Bound a log that is still held open by a detached child. Renaming such a
+/// file breaks the tailer, so compact it in place and keep the newest bytes.
+fn trim_live_log(path: &Path, max: u64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() <= max.saturating_mul(2) {
+        return;
+    }
+    let keep = max.saturating_mul(3) / 4;
+    let Ok(mut f) = OpenOptions::new().read(true).write(true).open(path) else {
+        return;
+    };
+    let start = meta.len().saturating_sub(keep);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut tail = Vec::new();
+    if f.read_to_end(&mut tail).is_err() {
+        return;
+    }
+    if f.seek(SeekFrom::Start(0)).is_err() {
+        return;
+    }
+    if f.write_all(&tail).is_ok() {
+        let _ = f.set_len(tail.len() as u64);
     }
 }
 
@@ -1009,7 +1151,10 @@ pub(crate) fn launch_url(token: Option<&str>) -> String {
 
 /// Whether a pinned dsh version predates launch-token support.
 pub(crate) fn is_legacy_without_launch_token(version: &str) -> bool {
-    version.starts_with("0.1.0") || version.starts_with("0.1.1")
+    let Ok(v) = semver::Version::parse(version.trim_start_matches('v')) else {
+        return false;
+    };
+    v.major == 0 && v.minor == 1 && v.patch < 2
 }
 
 /// 从 Dock 启动的应用 PATH 往往只有系统目录，npx/dsh/pnpm 都找不到。
@@ -1220,6 +1365,77 @@ fn process_alive(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+#[cfg(unix)]
+fn process_command(pid: u32) -> Option<String> {
+    if let Ok(bytes) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+        return Some(String::from_utf8_lossy(&bytes).replace('\0', " "));
+    }
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
+#[cfg(windows)]
+fn process_command(pid: u32) -> Option<String> {
+    Command::new("wmic")
+        .args([
+            "process",
+            "where",
+            &format!("ProcessId={pid}"),
+            "get",
+            "CommandLine",
+        ])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_owned())
+}
+
+fn process_identity_matches(pid: u32, saved: &str) -> bool {
+    let Some(current) = process_command(pid) else {
+        return false;
+    };
+    let current = current.to_lowercase();
+    let saved = saved.to_lowercase();
+    process_is_dsh(pid)
+        && (saved.is_empty()
+            || saved == current
+            || saved
+                .split_whitespace()
+                .any(|part| part.len() > 3 && current.contains(part)))
+}
+
+/// Best-effort ownership check for persisted PIDs. A PID can be reused after
+/// the client exits; never adopt or kill a reused process merely because it is
+/// alive. The command line must identify a DSH/Node process (the npx shell is
+/// also accepted because it may still be the process group leader).
+#[cfg(unix)]
+fn process_is_dsh(pid: u32) -> bool {
+    let cmd = process_command(pid).unwrap_or_default().to_lowercase();
+    cmd.contains("deepseek") || cmd.contains("dsh") || cmd.contains("npx")
+}
+
+#[cfg(windows)]
+fn process_is_dsh(pid: u32) -> bool {
+    let out = Command::new("wmic")
+        .args([
+            "process",
+            "where",
+            &format!("ProcessId={pid}"),
+            "get",
+            "CommandLine",
+        ])
+        .output();
+    match out {
+        Ok(o) => {
+            let cmd = String::from_utf8_lossy(&o.stdout).to_lowercase();
+            cmd.contains("deepseek") || cmd.contains("dsh") || cmd.contains("npx")
+        }
+        Err(_) => false,
+    }
+}
+
 #[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
     let out = Command::new("tasklist")
@@ -1251,7 +1467,10 @@ fn _kill_group_or_single(pid: u32, group: bool) {
 fn kill_group(pid: u32) {
     // 先尝试进程组：若 ESRCH（无此进程组 / 不是组长），进程组信号无效。
     unsafe {
-        if libc::kill(-(pid as i32), 0) == 0 {
+        let probe = libc::kill(-(pid as i32), 0);
+        let group_exists =
+            probe == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if group_exists {
             _kill_group_or_single(pid, true);
             return;
         }
@@ -1426,6 +1645,7 @@ mod tests {
     fn launch_token_support_starts_at_012() {
         assert!(is_legacy_without_launch_token("0.1.0"));
         assert!(is_legacy_without_launch_token("0.1.1-rc.2"));
+        assert!(!is_legacy_without_launch_token("0.1.10"));
         assert!(!is_legacy_without_launch_token("0.1.2-alpha.1"));
         assert!(!is_legacy_without_launch_token("0.1.2"));
     }

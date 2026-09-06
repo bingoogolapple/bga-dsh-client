@@ -127,6 +127,15 @@ pub(crate) async fn forward_regular(
     // 改写过 body 的响应不能再声称自己是压缩的，也不该沿用原 etag（内容已经变了）——
     // 请求侧已声明只接受 identity，这里是兜底：上游若仍压缩，宁可丢掉这个头。
     let rewritten = is_injectable || is_connection_bundle;
+    if rewritten {
+        if let Some(encoding) = response.headers().get(CONTENT_ENCODING) {
+            if encoding != "identity" {
+                // 改写前必须得到明文；删除 Content-Encoding 头不能解压响应，
+                // 否则浏览器会把 gzip/br 字节当 HTML/JS 解析。
+                return bad_gateway_response();
+            }
+        }
+    }
     let mut resp = Response::builder().status(status);
     for (name, value) in response.headers() {
         if is_framing_header(name) {

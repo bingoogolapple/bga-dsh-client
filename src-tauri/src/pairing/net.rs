@@ -13,12 +13,33 @@ pub(crate) fn lan_ipv4() -> Option<Ipv4Addr> {
         if let Ok(addr) = udp.local_addr() {
             if let IpAddr::V4(v) = addr.ip() {
                 if !v.is_loopback() {
+                    // 容器/虚拟网卡常把默认出口解析成 172.16/12（例如
+                    // 172.18.0.1），手机无法通过 Wi‑Fi 访问该地址。枚举接口后
+                    // 优先选择 192.168/16、10/8 等真实局域网地址。
+                    if let Some(candidate) = lan_ipv4_ifaddrs() {
+                        if address_rank(candidate) > address_rank(v) {
+                            return Some(candidate);
+                        }
+                    }
                     return Some(v);
                 }
             }
         }
     }
     lan_ipv4_ifaddrs()
+}
+
+fn address_rank(ip: Ipv4Addr) -> u8 {
+    let [a, b, ..] = ip.octets();
+    if a == 192 && b == 168 {
+        3
+    } else if a == 10 {
+        2
+    } else if a == 172 && (16..=31).contains(&b) {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(unix)]
@@ -39,7 +60,9 @@ fn lan_ipv4_ifaddrs() -> Option<Ipv4Addr> {
                     && !ip.is_link_local()
                     && !ip.is_unspecified()
                     && ip.is_private()
-                    && best.map(|b| !b.is_private()).unwrap_or(true)
+                    && best
+                        .map(|b| address_rank(ip) > address_rank(b))
+                        .unwrap_or(true)
                 {
                     best = Some(ip);
                 }

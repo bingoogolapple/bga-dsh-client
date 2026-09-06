@@ -241,7 +241,14 @@
 
   // ---------- 服务控制面板 ----------
   let lastStat = null;
+  let lastStatRevision = -1;
   function applyStat(info) {
+    // IPC events can arrive after an explicit query snapshot. Ignore stale
+    // lifecycle events so a delayed stop/start notification cannot roll the UI
+    // back to an older state.
+    const revision = Number.isFinite(info?.revision) ? info.revision : 0;
+    if (revision < lastStatRevision) return;
+    lastStatRevision = revision;
     lastStat = info;
     $("s-pill").textContent = stateLabel(info.state);
     $("s-pill").dataset.state = info.state;
@@ -565,24 +572,13 @@
         cancelText: t("versions.cancel_switch"),
       });
       if (!ok) return;
-      await invoke("dsh_set_active_version", { version });
+      await invoke("dsh_switch_active_version", { version });
       await dshRefreshVersions();
       // 立即把左下角 dsh 版本同步为刚切换到的版本（后台版本探测可能稍慢/失败，
       // 避免重启后左下角仍显示切换前的旧版本）。
       const activeVersion = $("dsh-active-ver").textContent.trim();
       if (activeVersion) $("v-dsh").textContent = activeVersion;
       toast(t("versions.restarting"));
-      await invoke("service_restart");
-      // 轮询等待服务真正启动后再探测版本（最多等 15 秒）
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        try {
-          const st = await invoke("query_status");
-          if (st && st.state === "running") break;
-        } catch (_) {
-          /* 忽略，服务尚未就绪 */
-        }
-      }
       await invoke("force_refresh_version_info");
     } catch (e) {
       toast(String(e));
@@ -623,17 +619,9 @@
     });
     if (!ok) return;
     try {
-      await invoke("dsh_set_active_version", { version: null });
+      await invoke("dsh_switch_active_version", { version: null });
       await dshRefreshVersions();
       toast(t("versions.restarting"));
-      await invoke("service_restart");
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        try {
-          const st = await invoke("query_status");
-          if (st && st.state === "running") break;
-        } catch (_) {}
-      }
       await invoke("force_refresh_version_info");
     } catch (e) {
       toast(String(e));
@@ -643,8 +631,21 @@
   // 刷新按钮：先同步渲染本地（秒回），再触发后台远程刷新
   dshRefreshBtn.onclick = () => {
     dshRefreshVersions();
-    dshSyncRemote();
+    // 手动刷新必须绕过一小时 TTL；自动进入面板仍使用 TTL。
+    dshRefreshRemote();
   };
+
+  function dshRefreshRemote() {
+    dshRefreshBtn.disabled = true;
+    invoke("dsh_refresh_remote_versions")
+      .catch(() => {})
+      .finally(() => {
+        // 后台命令立即返回，最终状态由 dsh-versions-refreshed 事件结束。
+        setTimeout(() => {
+          dshRefreshBtn.disabled = false;
+        }, 10000);
+      });
+  }
 
   // 远程刷新 / 删除完成事件（后台线程执行后广播，不冻结 UI）
   listen("dsh-versions-refreshed", (e) => {
@@ -690,6 +691,7 @@
   // 托盘服务操作结束自动打开设置页（新建窗口）时，URL 携带 ?panel= 参数，启动后定位到对应面板。
   const panelFromUrl = new URLSearchParams(location.search).get("panel");
   if (panelFromUrl && panelEls.has(panelFromUrl)) switchPanel(panelFromUrl);
+  else switchPanel("service");
 
   // ---------- 语言切换重渲染 ----------
   // i18n.js 已把静态 [data-i18n] 元素替换为当前语言；这里重渲染 JS 生成的动态文案：

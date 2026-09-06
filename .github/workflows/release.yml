@@ -200,6 +200,38 @@ jobs:
           SENTRY_DSN: ${{ github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
         run: ./scripts/build-release.sh two
 
+      # 发布门禁：构建脚本即使某个 Tauri bundler 没有产物也可能返回成功（例如
+      # 配置/平台目标变化导致目录为空）。在上传 Release 前显式检查两套产物，
+      # 避免把不完整的版本发布出去。
+      - name: 校验发布产物完整性
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for variant in plain bundled; do
+            files=(dist/release/$variant/*)
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "错误: dist/release/$variant 没有生成任何产物" >&2
+              exit 1
+            fi
+          done
+          case "${{ runner.os }}" in
+            macOS)
+              for variant in plain bundled; do
+                comp=(dist/release/$variant/*.dmg)
+                [ "${#comp[@]}" -gt 0 ] || { echo "错误: $variant 缺少 dmg" >&2; exit 1; }
+              done ;;
+            Linux)
+              for variant in plain bundled; do
+                comp=(dist/release/$variant/*.deb)
+                [ "${#comp[@]}" -gt 0 ] || { echo "错误: $variant 缺少 deb" >&2; exit 1; }
+              done ;;
+            Windows)
+              for variant in plain bundled; do
+                comp=(dist/release/$variant/*.exe)
+                [ "${#comp[@]}" -gt 0 ] || { echo "错误: $variant 缺少 exe" >&2; exit 1; }
+              done ;;
+          esac
+
       # ditto 打包 .app 以保留符号链接与执行权限，行为与 zip -r 不同、更稳妥；
       # zip 文件名带架构后缀，避免多个矩阵产物重名。仅 macOS 产物有 .app（Linux 走 deb）。
       - name: 打包 .app 为 zip（仅 macOS，且仅 tag 触发时）

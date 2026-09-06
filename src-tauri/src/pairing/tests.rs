@@ -202,6 +202,7 @@ fn query_has_pair_matches_only_code() {
     assert!(query_has_pair("/?x=1&pair=123456&y=2", "123456"));
     assert!(!query_has_pair("/?pair=654321", "123456"));
     assert!(!query_has_pair("/", "123456"));
+    assert!(!query_has_pair("/?pair=123456&pair=654321", "123456"));
 }
 
 // -----------------------------------------------------------------------
@@ -737,9 +738,8 @@ fn is_connection_bundle_supports_single_file_form() {
 // 压缩与改写：网关改过 body 的响应不能再声称自己是压缩的
 // -----------------------------------------------------------------------
 
-/// 网关会往 HTML 里注入 polyfill，所以上游一旦压缩，浏览器就会拿到
-/// 「gzip 数据 + 明文脚本」而报 `ERR_CONTENT_DECODING_FAILED`。两道防线：
-/// 请求侧显式声明只接受 identity，且改写过的响应一律剥掉 content-encoding。
+/// 网关会往 HTML 里注入 polyfill，所以上游一旦仍返回压缩体，必须拒绝改写，
+/// 不能只删除 content-encoding 头后把压缩字节当明文返回。
 #[tokio::test]
 async fn rewritten_html_never_claims_compression() {
     let seen: Arc<Mutex<Option<HeaderMap>>> = Arc::new(Mutex::new(None));
@@ -766,22 +766,9 @@ async fn rewritten_html_never_claims_compression() {
     }))
     .await;
 
-    let (status, headers, body) = gateway_get(gateway_addr, "/").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        headers.get(CONTENT_ENCODING).is_none(),
-        "改写过的 HTML 不能带 content-encoding: {headers:?}"
-    );
-    assert!(
-        headers.get(ETAG).is_none(),
-        "改写过的 HTML 不能沿用原 etag: {headers:?}"
-    );
-    assert_eq!(
-        headers.get(CACHE_CONTROL).and_then(|v| v.to_str().ok()),
-        Some("no-store"),
-        "改写过的响应不能被缓存（否则一直用改写前的旧副本）: {headers:?}"
-    );
-    assert!(body.windows(10).any(|w| w == b"randomUUID"));
+    let (status, headers, _body) = gateway_get(gateway_addr, "/").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(headers.get(CONTENT_ENCODING).is_none());
 
     let sent = seen.lock().unwrap().clone().expect("上游应收到请求");
     assert_eq!(

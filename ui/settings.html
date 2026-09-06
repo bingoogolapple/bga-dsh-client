@@ -96,7 +96,7 @@
           <h1 class="panel-title" data-i18n="svc.title">dsh 服务控制</h1>
           <span id="s-pill" class="pill" data-state="none" data-i18n="svc.unknown">未知</span>
         </div>
-        <p class="hint" data-i18n="svc.hint">关闭窗口不会停止服务；本应用启动的服务可由托盘或此处管理。若 3080 上运行的是外部启动的服务，启动/停止/重启均不可用。</p>
+        <p class="hint" data-i18n="svc.hint">关闭窗口不会停止服务；本应用启动或可识别的外部 DSH 服务均可由托盘或此处管理。无法确认归属的普通占端口程序不会被操作。</p>
         <div class="service-actions-row">
           <button id="s-start" class="action-btn action-accent">
             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -131,7 +131,7 @@
             <input id="stop-service-on-quit" type="checkbox" />
             <div>
               <div class="option-title" data-i18n="gen.quit.stop">退出应用时停止服务</div>
-              <div class="option-desc" data-i18n="gen.quit.stop.desc">点击系统托盘「退出应用」时，是否一并停止本应用启动的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。外部已有的服务不受此开关影响。</div>
+              <div class="option-desc" data-i18n="gen.quit.stop.desc">点击系统托盘「退出应用」时，是否一并停止本应用管理的服务。默认不勾选：退出应用后服务继续运行在 127.0.0.1:3080，下次打开应用会自动接管，仍可从托盘停止或重启它。可识别的外部 DSH 也支持管理。</div>
             </div>
           </label>
         </section>

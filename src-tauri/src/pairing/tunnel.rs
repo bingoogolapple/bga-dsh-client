@@ -10,6 +10,8 @@ use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 struct PreparedUpgrade {
     upstream_io: tokio::net::TcpStream,
@@ -29,6 +31,7 @@ pub(crate) async fn handle_upgrade(
     mut req: Request<Incoming>,
     upstream: SocketAddr,
     cookie: Option<&str>,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Response<HandlerBody> {
     let method = req.method().clone();
     let uri_path = req
@@ -67,7 +70,7 @@ pub(crate) async fn handle_upgrade(
             Ok(io) => io,
             Err(_) => return,
         };
-        tunnel_after_upgrade(client_io, prepared).await;
+        tunnel_after_upgrade(client_io, prepared, cancel).await;
     });
 
     build_upgrade_response(&resp_head)
@@ -168,14 +171,33 @@ pub(crate) fn build_upgrade_response(head: &[u8]) -> Response<HandlerBody> {
 }
 
 /// 升级完成后：把预读字节补发给手机，再双向原始拷贝（WS 帧流不做任何改写）。
-async fn tunnel_after_upgrade(client_io: Upgraded, prepared: PreparedUpgrade) {
+async fn tunnel_after_upgrade(
+    client_io: Upgraded,
+    prepared: PreparedUpgrade,
+    cancel: Option<Arc<AtomicBool>>,
+) {
     let mut client_io = TokioIo::new(client_io);
     let mut upstream_io = prepared.upstream_io;
     use tokio::io::AsyncWriteExt;
     if !prepared.extra.is_empty() && client_io.write_all(&prepared.extra).await.is_err() {
         return;
     }
-    let _ = tokio::io::copy_bidirectional(&mut client_io, &mut upstream_io).await;
+    if let Some(cancel) = cancel {
+        // copy_bidirectional otherwise keeps an idle WebSocket alive forever after
+        // revocation. Poll a cheap cancellation future alongside the copy and let
+        // dropping the copy close both streams.
+        let cancel_wait = async move {
+            while !cancel.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        };
+        tokio::select! {
+            _ = cancel_wait => {},
+            _ = tokio::io::copy_bidirectional(&mut client_io, &mut upstream_io) => {},
+        }
+    } else {
+        let _ = tokio::io::copy_bidirectional(&mut client_io, &mut upstream_io).await;
+    }
 }
 
 // ---------------------------------------------------------------------------

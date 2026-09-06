@@ -105,12 +105,15 @@ if (!existsSync(nodeBin)) throw new Error('Node 解压失败')
 }
 
 // 3) 可复现安装：提交的 package.json + lockfile 精确锁定 dsh 与 pnpm，npm ci 安装
-const hasLock = existsSync(join(runtimeDir, 'package-lock.json'))
 writeFileSync(
   join(runtimeDir, 'package.json'),
   JSON.stringify({ name: 'dsh-client-runtime', private: true, dependencies: { '@deepseek-ai/dsh': DSH_VERSION, pnpm: PNPM_VERSION } }, null, 2) + '\n',
 )
-console.log(`[bundle] npm ci @deepseek-ai/dsh@${DSH_VERSION} + pnpm@${PNPM_VERSION}（--ignore-scripts）…`)
+// Always refresh the lockfile from the exact package.json before installation.
+// This prevents a stale checked-in lock from silently installing a different
+// runtime after NODE/DSH/PNPM version bumps. npm ci then makes the actual tree
+// reproducible and fails fast when the lock is inconsistent.
+console.log(`[bundle] 生成/校验 package-lock.json…`)
 const npmCli = IS_WIN
   ? join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
   : join(nodeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
@@ -122,7 +125,13 @@ const targetFlags = TARGET ? ['--os=' + (TARGET === 'win32' ? 'win32' : TARGET),
 // Ubuntu 16GB runner 的 v8 动态上限相当；机器内存足够，堆不会真正用满）。
 execFileSync(
   npmRunner,
-  [npmCli, hasLock ? 'ci' : 'install', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--ignore-scripts', ...targetFlags],
+  [npmCli, 'install', '--package-lock-only', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--ignore-scripts', ...targetFlags],
+  { stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' } },
+)
+console.log(`[bundle] npm ci @deepseek-ai/dsh@${DSH_VERSION} + pnpm@${PNPM_VERSION}（--ignore-scripts）…`)
+execFileSync(
+  npmRunner,
+  [npmCli, 'ci', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--ignore-scripts', ...targetFlags],
   { stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' } },
 )
 

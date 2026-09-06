@@ -60,7 +60,7 @@
       "svc.title": "dsh 服务控制",
       "svc.unknown": "未知",
       "svc.hint":
-        "关闭窗口不会停止服务；本应用启动的服务可由托盘或此处管理。若 3080 上运行的是外部启动的服务，启动/停止/重启均不可用。",
+        "关闭窗口不会停止服务；本应用启动或可识别的外部 DSH 服务均可由托盘或此处管理。无法确认归属的普通占端口程序不会被操作。",
       "svc.start": "启动 dsh 服务",
       "svc.restart": "重启 dsh 服务",
       "svc.stop": "停止 dsh 服务",
@@ -220,7 +220,7 @@
       "gen.quit": "On Quit",
       "gen.quit.stop": "Stop service when quitting",
       "gen.quit.stop.desc":
-        "Whether to also stop the service started by this app when Quit is chosen from the tray. Unchecked by default: after quitting, the service keeps running on 127.0.0.1:3080, is taken over automatically the next time the app opens, and can still be stopped or restarted from the tray. Externally started services are never affected.",
+        "Whether to also stop the service managed by this app when Quit is chosen from the tray. Unchecked by default: after quitting, the service keeps running on 127.0.0.1:3080, is taken over automatically the next time the app opens, and can still be stopped or restarted from the tray. Verifiable external DSH services can also be managed.",
 
       "gen.privacy": "Privacy",
       "gen.privacy.telemetry": "Anonymous usage statistics",
@@ -230,7 +230,7 @@
       "svc.title": "dsh Service",
       "svc.unknown": "Unknown",
       "svc.hint":
-        "Closing the window does not stop the service; services started by this app can be managed from the tray or here. If the service on port 3080 was started externally, Start/Stop/Restart are all unavailable.",
+        "Closing the window does not stop the service; services started by this app or a verifiable external DSH can be managed from the tray or here. Unidentified processes occupying port 3080 are left untouched.",
       "svc.start": "Start dsh Service",
       "svc.restart": "Restart dsh Service",
       "svc.stop": "Stop dsh Service",

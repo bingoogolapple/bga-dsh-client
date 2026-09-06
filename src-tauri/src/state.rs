@@ -49,13 +49,15 @@ where
     F: FnOnce(&mut Settings),
 {
     let state = app.state::<AppState>();
-    let mut current = lock(&state.settings).clone();
+    // Keep the settings lock across the read-modify-write transaction.  Cloning
+    // and releasing it before saving lets two concurrent commands overwrite one
+    // another (for example registry and active-version changes).
+    let mut current = lock(&state.settings);
     f(&mut current);
     let path = lock(&state.config_path)
         .clone()
         .ok_or_else(|| crate::i18n::tr(crate::i18n::current(app), "set.config_dir_missing", &[]))?;
     current.save(&path)?;
-    *lock(&state.settings) = current;
     Ok(())
 }
 

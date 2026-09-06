@@ -20,7 +20,7 @@
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
 use serde_json::json;
 
@@ -68,9 +68,9 @@ pub fn set_enabled(on: bool) {
 ///   用户后续在设置页开启时，本函数已被 `Once` 消耗，故开启走
 ///   `set_enabled` + 惰性初始化（见 `ensure_client`）。
 /// - 未注入 `SENTRY_DSN` 时：即使 enabled 也保持空转。
-pub fn init(app_version: &str, enabled: bool) {
-    set_enabled(enabled);
-    if !enabled || dsn().is_none() {
+pub fn init(app_version: &str, enabled_setting: bool) {
+    set_enabled(enabled_setting);
+    if !enabled_setting || dsn().is_none() {
         return;
     }
     INIT.call_once(|| {
@@ -92,6 +92,9 @@ pub fn init(app_version: &str, enabled: bool) {
                     .into(),
                 ),
                 traces_sample_rate: 0.0, // 不采集性能追踪（免费版额度有限）
+                // The panic integration bypasses capture_event; enforce the
+                // user's runtime choice at Sentry's final send boundary too.
+                before_send: Some(Arc::new(|event| if enabled() { Some(event) } else { None })),
                 ..Default::default()
             },
         ));
@@ -132,6 +135,7 @@ fn ensure_client() {
                 release: sentry::release_name!(),
                 environment: Some("production".into()),
                 traces_sample_rate: 0.0,
+                before_send: Some(Arc::new(|event| if enabled() { Some(event) } else { None })),
                 ..Default::default()
             },
         ));

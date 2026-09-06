@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -29,6 +30,54 @@ const REMOTE_CACHE_TTL_SECS: u64 = 3600;
 
 /// 默认 npm registry（用户未指定且设置里没有时使用）。
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
+static DOWNLOADS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+/// Serialize destructive operations on the versions directory. Download and delete
+/// must never manipulate the same directory concurrently.
+static VERSION_OPS: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn validate_version(version: &str) -> Result<(), String> {
+    if semver::Version::parse(version.trim_start_matches('v')).is_err()
+        || version.contains('/')
+        || version.contains('\\')
+        || version.contains("..")
+    {
+        return Err(format!("非法 dsh 版本: {version}"));
+    }
+    Ok(())
+}
+
+fn validated_registry(app: &AppHandle) -> Result<String, String> {
+    let registry = crate::state::settings(app)
+        .npm_registry
+        .clone()
+        .unwrap_or_else(|| DEFAULT_REGISTRY.into());
+    let registry = registry.trim_end_matches('/');
+    if [DEFAULT_REGISTRY, "https://registry.npmmirror.com"].contains(&registry) {
+        Ok(registry.to_string())
+    } else {
+        Err(format!("不支持的 npm 下载源: {registry}"))
+    }
+}
+
+fn version_path(root: &std::path::Path, version: &str) -> Result<PathBuf, String> {
+    validate_version(version)?;
+    if !root.exists() {
+        return Ok(root.join(version));
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("版本目录不可用: {e}"))?;
+    let candidate = root.join(version);
+    if candidate.exists() {
+        let actual = candidate
+            .canonicalize()
+            .map_err(|e| format!("版本目录不可用: {e}"))?;
+        if actual.parent() != Some(root.as_path()) {
+            return Err(format!("版本路径越界: {version}"));
+        }
+    }
+    Ok(candidate)
+}
 
 /// `~/.dsh/bga-dsh-client/dsh-versions/` 目录：存放用户手动下载的各版本 dsh。
 /// 与 settings.json 同级（~/.dsh/bga-dsh-client/），便于用户管理和清理。
@@ -202,10 +251,7 @@ pub fn dsh_maybe_refresh_remote_versions(app: AppHandle) -> Result<(), String> {
 
 /// 拉取远程版本 → 写缓存 → 返回合并后的完整列表（在后台线程调用，可阻塞）。
 fn fetch_remote_versions_blocking(app: &AppHandle) -> Result<Vec<DshVersionEntry>, String> {
-    let registry = crate::state::settings(app)
-        .npm_registry
-        .clone()
-        .unwrap_or_else(|| DEFAULT_REGISTRY.into());
+    let registry = validated_registry(app)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -229,7 +275,20 @@ fn fetch_remote_versions_blocking(app: &AppHandle) -> Result<Vec<DshVersionEntry
 /// 后台下载指定版本（spawn 线程执行 npm install）。
 #[tauri::command]
 pub fn dsh_download_version(app: AppHandle, version: String) -> Result<(), String> {
-    let target = dsh_versions_dir(&app).join(&version);
+    validate_version(&version)?;
+    let downloads = DOWNLOADS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut active = downloads.lock().unwrap_or_else(|e| e.into_inner());
+    if !active.insert(version.clone()) {
+        return Err(format!("版本 {} 正在下载", version));
+    }
+    drop(active);
+    let root = dsh_versions_dir(&app);
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let target = version_path(&root, &version)?;
+    let _operation = VERSION_OPS
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let bin_js = target
         .join("node_modules")
         .join("@deepseek-ai")
@@ -237,17 +296,32 @@ pub fn dsh_download_version(app: AppHandle, version: String) -> Result<(), Strin
         .join("lib")
         .join("bin.js");
     if bin_js.exists() {
+        downloads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&version);
         return Err(format!("版本 {} 已下载", version));
     }
     // 目录存在但 bin.js 不存在 → 上次下载失败残留，清理后重新下载
     if target.exists() {
         let _ = std::fs::remove_dir_all(&target);
     }
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::create_dir_all(&target) {
+        downloads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&version);
+        return Err(e.to_string());
+    }
+    drop(_operation);
 
     let handle = app.clone();
     let ver = version.clone();
     std::thread::spawn(move || {
+        let _operation = VERSION_OPS
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let result = do_download_dsh(&handle, &ver, &target);
         let stage = match &result {
             Ok(()) => "done",
@@ -264,6 +338,9 @@ pub fn dsh_download_version(app: AppHandle, version: String) -> Result<(), Strin
         );
         if stage == "error" {
             let _ = std::fs::remove_dir_all(&target);
+        }
+        if let Some(set) = DOWNLOADS.get() {
+            set.lock().unwrap_or_else(|e| e.into_inner()).remove(&ver);
         }
     });
     Ok(())
@@ -286,27 +363,59 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
         }),
     );
 
-    let registry = crate::state::settings(app)
-        .npm_registry
-        .clone()
-        .unwrap_or_else(|| DEFAULT_REGISTRY.into());
+    let registry = validated_registry(app)?;
 
     let cache_dir = crate::service::files_dir(app).join("dsh-download-cache");
     let _ = std::fs::create_dir_all(&cache_dir);
 
     #[cfg(not(windows))]
-    let cmd = format!(
-        "{path_prefix}npm install --save-exact --registry {registry} @deepseek-ai/dsh@{ver}",
-        path_prefix = crate::service::shell_path_prefix(),
-        registry = registry,
-        ver = version,
-    );
+    let cmd = if let Some(rt) = crate::service::runtime_root(app) {
+        if let Some((node, _)) = crate::service::runtime_entry(&rt) {
+            let npm = if cfg!(windows) {
+                rt.join("nd/node_modules/npm/bin/npm-cli.js")
+            } else {
+                rt.join("nd/lib/node_modules/npm/bin/npm-cli.js")
+            };
+            format!(
+                "exec \"{}\" \"{}\" install --save-exact --registry \"{}\" @deepseek-ai/dsh@{}",
+                node.display(),
+                npm.display(),
+                registry,
+                version
+            )
+        } else {
+            format!(
+                "{}npm install --save-exact --registry \"{}\" @deepseek-ai/dsh@{}",
+                crate::service::shell_path_prefix(),
+                registry,
+                version
+            )
+        }
+    } else {
+        format!(
+            "{}npm install --save-exact --registry \"{}\" @deepseek-ai/dsh@{}",
+            crate::service::shell_path_prefix(),
+            registry,
+            version
+        )
+    };
     #[cfg(windows)]
-    let cmd = format!(
-        "npm install --save-exact --registry {registry} @deepseek-ai/dsh@{ver}",
-        registry = registry,
-        ver = version,
-    );
+    let cmd = if let Some(rt) = crate::service::runtime_root(app) {
+        if let Some((node, _)) = crate::service::runtime_entry(&rt) {
+            let npm = rt.join("nd/node_modules/npm/bin/npm-cli.js");
+            format!(
+                "\"{}\" \"{}\" install --save-exact --registry \"{}\" @deepseek-ai/dsh@{}",
+                node.display(),
+                npm.display(),
+                registry,
+                version
+            )
+        } else {
+            format!("npm install --save-exact --registry \"{registry}\" @deepseek-ai/dsh@{version}")
+        }
+    } else {
+        format!("npm install --save-exact --registry \"{registry}\" @deepseek-ai/dsh@{version}")
+    };
 
     // 带超时 + 管道防死锁的 subprocess 执行（与 version::run_capture 同模式）
     use std::io::Read;
@@ -404,7 +513,8 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
 /// 后台删除已下载版本。
 #[tauri::command]
 pub fn dsh_delete_version(app: AppHandle, version: String) -> Result<(), String> {
-    let target = dsh_versions_dir(&app).join(&version);
+    validate_version(&version)?;
+    let target = version_path(&dsh_versions_dir(&app), &version)?;
     if !target.exists() {
         return Err(format!("版本 {} 不存在", version));
     }
@@ -412,15 +522,28 @@ pub fn dsh_delete_version(app: AppHandle, version: String) -> Result<(), String>
     if crate::state::settings(&app).dsh_version.as_deref() == Some(&version) {
         return Err(format!("版本 {} 正在使用，无法删除", version));
     }
+    if DOWNLOADS
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&version)
+    {
+        return Err(format!("版本 {} 正在下载，无法删除", version));
+    }
     let handle = app.clone();
     std::thread::spawn(move || {
-        let _ = std::fs::remove_dir_all(&target);
+        let _operation = VERSION_OPS
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let result = std::fs::remove_dir_all(&target);
         let _ = handle.emit(
             "dsh-versions-refreshed",
             serde_json::json!({
-                "ok": true,
+                "ok": result.is_ok(),
                 "action": "delete",
                 "list": list_versions(&handle),
+                "error": result.err().map(|e| e.to_string()),
             }),
         );
     });
@@ -430,6 +553,21 @@ pub fn dsh_delete_version(app: AppHandle, version: String) -> Result<(), String>
 /// 设置用户选定的 DSH 版本（Some 表示指定版本，None 表示恢复默认）。
 #[tauri::command]
 pub fn dsh_set_active_version(app: AppHandle, version: Option<String>) -> Result<(), String> {
+    if let Some(ref v) = version {
+        validate_version(v)?;
+        let target = version_path(&dsh_versions_dir(&app), v)?;
+        let installed = target
+            .join("node_modules/@deepseek-ai/dsh/lib/bin.js")
+            .is_file();
+        let builtin = crate::dsh::builtin_dsh_version(&app).as_deref() == Some(v.as_str());
+        if !installed && !builtin {
+            return Err(format!("版本 {} 尚未完成安装", v));
+        }
+        let info = app.state::<crate::AppState>().sm.info(&app);
+        if info.state == crate::service::ServiceState::Running && !info.mine {
+            return Err("当前运行的是外部 DSH，无法切换版本".into());
+        }
+    }
     let target = version.clone();
     crate::state::update_settings(&app, |s| s.dsh_version = target)?;
     crate::telemetry::capture_event(
@@ -437,6 +575,37 @@ pub fn dsh_set_active_version(app: AppHandle, version: Option<String>) -> Result
         Some(serde_json::json!({ "version": version })),
     );
     Ok(())
+}
+
+/// Atomically switch the selected version when the service is running.  The
+/// previous setting is retained until the new process reaches Running; a
+/// failed candidate is rolled back and the previous process is started again.
+#[tauri::command]
+pub fn dsh_switch_active_version(app: AppHandle, version: Option<String>) -> Result<(), String> {
+    let previous = crate::state::settings(&app).dsh_version.clone();
+    let was_running =
+        app.state::<crate::AppState>().sm.info(&app).state == crate::service::ServiceState::Running;
+    dsh_set_active_version(app.clone(), version)?;
+    if !was_running {
+        return Ok(());
+    }
+    app.state::<crate::AppState>().sm.restart(&app);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let state = app.state::<crate::AppState>().sm.info(&app).state;
+        if state == crate::service::ServiceState::Running {
+            return Ok(());
+        }
+        if state == crate::service::ServiceState::Error {
+            break;
+        }
+    }
+    // Restore the known-good selection and restart it.  Return the original
+    // failure after rollback so the UI can explain that the candidate failed.
+    let _ = dsh_set_active_version(app.clone(), previous);
+    app.state::<crate::AppState>().sm.restart(&app);
+    Err("新版本启动失败，已自动恢复上一版本".into())
 }
 
 /// 获取当前选定的 DSH 版本。
@@ -448,6 +617,11 @@ pub fn dsh_active_version(app: AppHandle) -> Option<String> {
 /// 保存用户选择的 npm 下载源（官方源 / 淘宝镜像）。
 #[tauri::command]
 pub fn dsh_set_registry(app: AppHandle, registry: String) -> Result<(), String> {
+    let valid = [DEFAULT_REGISTRY, "https://registry.npmmirror.com"];
+    if !valid.contains(&registry.trim_end_matches('/')) {
+        return Err(format!("不支持的 npm 下载源: {registry}"));
+    }
+    let registry = registry.trim_end_matches('/').to_string();
     let r = registry.clone();
     crate::state::update_settings(&app, |s| s.npm_registry = Some(r))?;
     crate::telemetry::capture_event(
@@ -461,4 +635,17 @@ pub fn dsh_set_registry(app: AppHandle, registry: String) -> Result<(), String> 
 #[tauri::command]
 pub fn dsh_get_registry(app: AppHandle) -> Option<String> {
     crate::state::settings(&app).npm_registry.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_version;
+
+    #[test]
+    fn rejects_path_like_versions() {
+        assert!(validate_version("../tmp").is_err());
+        assert!(validate_version("0.1.2/../../x").is_err());
+        assert!(validate_version("0.1.2").is_ok());
+        assert!(validate_version("v0.1.2").is_ok());
+    }
 }

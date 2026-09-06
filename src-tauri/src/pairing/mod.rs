@@ -46,7 +46,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -69,7 +69,9 @@ mod tunnel;
 mod upstream;
 
 use forward::{build_client, forward_regular};
-use http::{bad_gateway_response, denied_response, redirect_home_with_session};
+use http::{
+    bad_gateway_response, denied_response, redirect_home_with_session, service_down_response,
+};
 use net::lan_ipv4;
 use qrcode::{qr_rgba, qr_svg};
 use rewrite::{extract_pair_cookie, is_upgrade_request, query_has_pair};
@@ -88,6 +90,40 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const QR_SCALE: u32 = 8;
 /// 复制二维码 PNG 的留白（模块数）。
 const QR_MARGIN: u32 = 2;
+/// Upper bound on concurrently active client connections.  This prevents an
+/// unauthenticated LAN scan (or a slow client) from creating an unbounded
+/// number of tasks and file descriptors.
+const MAX_CONNECTIONS: usize = 128;
+const UPSTREAM_COOKIE_TIMEOUT: Duration = Duration::from_secs(6);
+
+static CONNECTIONS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+
+fn connection_budget() -> &'static Arc<tokio::sync::Semaphore> {
+    CONNECTIONS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS)))
+}
+
+async fn ensure_cookie_async(app: &AppHandle, upstream: SocketAddr) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + UPSTREAM_COOKIE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        let attempt_app = app.clone();
+        match tokio::time::timeout(
+            remaining,
+            tokio::task::spawn_blocking(move || upstream::ensure_cookie(&attempt_app, upstream)),
+        )
+        .await
+        {
+            Ok(Ok(Some(cookie))) => return Some(cookie),
+            Ok(Ok(None)) | Ok(Err(_)) => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(_) => return None,
+        }
+    }
+}
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 type HandlerBody = http_body_util::combinators::BoxBody<bytes::Bytes, BoxErr>;
@@ -103,6 +139,8 @@ pub struct Pairing {
     /// 启动失败原因（端口全被占用等）。
     error: Option<String>,
     code: String,
+    code_expires: SystemTime,
+    failed_pairs: Vec<(Instant, IpAddr)>,
     /// QR 完整内容（含配对码），供展示 / 复制 / 生成 PNG。
     url: String,
     port: u16,
@@ -130,6 +168,9 @@ pub struct Session {
     /// 配对时的来源 IP（**仅展示用**，不参与信任判定；经 localhost.run 等
     /// 隧道访问时恒为 127.0.0.1，这正是不能按 IP 信任的原因）。
     peer: IpAddr,
+    /// Set when the session is revoked (stop, code rotation, or expiry).
+    /// Upgrade tasks observe this flag and close established tunnels.
+    revoked: Arc<AtomicBool>,
 }
 
 /// 下发给前端的信息。
@@ -173,6 +214,8 @@ impl Pairing {
             running: false,
             error: None,
             code: token::gen_code().unwrap_or_default(),
+            code_expires: SystemTime::now() + Duration::from_secs(5 * 60),
+            failed_pairs: Vec::new(),
             url: String::new(),
             port: 0,
             lan_ip: None,
@@ -318,6 +361,9 @@ pub fn stop_pairing(app: &AppHandle) {
     if p.running {
         p.running = false;
         p.stop.store(true, Ordering::SeqCst);
+        for session in p.sessions.values() {
+            session.revoked.store(true, Ordering::SeqCst);
+        }
         p.sessions.clear();
         push_log(app, tr(crate::i18n::current(app), "pair.stop_log", &[]));
     }
@@ -377,23 +423,56 @@ async fn serve_loop(
                 let peer = addr.ip();
                 let app = app.clone();
                 let client = client.clone();
+                let request_stop = stop.clone();
+                let permit = match connection_budget().clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        drop(sock);
+                        continue;
+                    }
+                };
                 tokio::spawn(async move {
+                    let _permit = permit;
                     let service = service_fn(move |req| {
                         let app = app.clone();
                         let client = client.clone();
+                        let request_stop = request_stop.clone();
                         async move {
-                            let res: Response<HandlerBody> =
-                                handle_request(req, peer, app, client, upstream).await;
+                            let res: Response<HandlerBody> = handle_request(
+                                req,
+                                peer,
+                                app,
+                                client,
+                                upstream,
+                                request_stop.clone(),
+                            )
+                            .await;
                             Ok::<_, Infallible>(res)
                         }
                     });
+                    // Do not use hyper's header_read_timeout here: it requires a
+                    // configured hyper timer, while Tauri's runtime does not
+                    // install one for this low-level connection builder. The
+                    // request handler and connection budget provide the safety
+                    // limits without resetting otherwise valid LAN requests.
                     let conn = http1::Builder::new().serve_connection(TokioIo::new(sock), service);
                     // with_upgrades():没有它,带 Connection: upgrade 的请求的
                     // hyper::upgrade::on() future 永远不会完成。
                     let _ = conn.with_upgrades().await;
                 });
             }
-            Ok(Err(_)) => return,
+            Ok(Err(e)) => {
+                let message = format!("代理监听异常: {e}");
+                {
+                    let state = app.state::<AppState>();
+                    let mut p = crate::state::lock(&state.pairing);
+                    p.running = false;
+                    p.error = Some(message.clone());
+                }
+                push_log(&app, message);
+                let _ = app.emit("pairing-status", info(&app));
+                return;
+            }
             Err(_) => continue,
         }
     }
@@ -406,6 +485,7 @@ async fn handle_request(
     app: AppHandle,
     client: UpstreamClient,
     upstream: SocketAddr,
+    stop: Arc<AtomicBool>,
 ) -> Response<HandlerBody> {
     // 配对/信任门禁：
     // - 所有设备（包括 loopback）都需要通过配对码验证或已放行；
@@ -419,12 +499,33 @@ async fn handle_request(
         .map(|pq| pq.as_str().to_owned())
         .unwrap_or_else(|| "/".to_owned());
     let path = target.split('?').next().unwrap_or("/").to_owned();
+    // 停止或旧代次的监听任务不得继续处理请求；仅停止 accept 不会关闭已建立的
+    // hyper 连接，因此在请求入口再次检查运行状态。
+    if stop.load(Ordering::SeqCst) {
+        return service_down_response();
+    }
+    let mut session_cancel: Option<Arc<AtomicBool>> = None;
+    let mut paired_token: Option<String> = None;
     let trusted = is_public_metadata(&path) || {
         let state = app.state::<AppState>();
         let mut p = crate::state::lock(&state.pairing);
 
         // 检查是否包含有效的配对码
-        if !p.code.is_empty() && query_has_pair(&target, &p.code) {
+        let now = SystemTime::now();
+        if now >= p.code_expires {
+            rotate_code(&mut p);
+            p.code_expires = now + Duration::from_secs(5 * 60);
+        }
+        let pair_attempt = target.contains("pair=");
+        p.failed_pairs
+            .retain(|(at, _)| at.elapsed() < Duration::from_secs(60));
+        let limited = p.failed_pairs.iter().filter(|(_, ip)| *ip == peer).count() >= 10;
+        if pair_attempt && limited {
+            drop(p);
+            return denied_response(crate::i18n::current(&app));
+        }
+        let pair_matched = !p.code.is_empty() && query_has_pair(&target, &p.code);
+        if pair_matched {
             // 签发会话令牌（防碰撞重试），Set-Cookie 随 302 返回浏览器；
             // 白名单从此按 令牌 记，不再按 IP 记（peer 仅作展示元数据）。
             let token = loop {
@@ -444,41 +545,71 @@ async fn handle_request(
                 Session {
                     expires: SystemTime::now() + PAIR_TTL,
                     peer,
+                    revoked: Arc::new(AtomicBool::new(false)),
                 },
             );
             rotate_code(&mut p);
+            p.code_expires = SystemTime::now() + Duration::from_secs(5 * 60);
+            p.failed_pairs.clear();
             drop(p);
-            // 配对成功就顺手把上游会话换好：手机 302 回首页时不会撞上 401。
-            if upstream::ensure_cookie(&app, upstream).is_none() {
+            paired_token = Some(token);
+            true
+        } else {
+            // 会话 Cookie（浏览器配对）：令牌跟着浏览器走、不跟着 IP 走。
+            // loopback 来源（localhost.run 等隧道把外网流量折叠成 127.0.0.1）与
+            // 局域网直连走同一通道——封死「一台设备配对、全员免检」。
+            if pair_attempt {
+                p.failed_pairs.push((Instant::now(), peer));
+            }
+            let session_ok = extract_pair_cookie(req.headers())
+                .as_deref()
+                .and_then(|t| p.sessions.get(t))
+                .map(|s| {
+                    let valid = s.expires > SystemTime::now() && !s.revoked.load(Ordering::SeqCst);
+                    if valid {
+                        session_cancel = Some(s.revoked.clone());
+                    }
+                    valid
+                })
+                .unwrap_or(false);
+
+            // 顺手清理过期条目（每次访问顺带做，量小）。
+            p.sessions.retain(|_, s| {
+                let keep = s.expires > SystemTime::now() && !s.revoked.load(Ordering::SeqCst);
+                if !keep {
+                    s.revoked.store(true, Ordering::SeqCst);
+                }
+                keep
+            });
+            session_ok
+        }
+    };
+    if let Some(token) = paired_token {
+        // 配对成功必须立即返回 302；上游 Cookie 交换属于预热，不应阻塞首次
+        // 配对（Docker/局域网中上游暂不可达时尤其容易造成浏览器一直转圈）。
+        let warm_app = app.clone();
+        tokio::spawn(async move {
+            if ensure_cookie_async(&warm_app, upstream).await.is_none() {
                 push_log(
-                    &app,
-                    tr(crate::i18n::current(&app), "pair.upstream_fail_log", &[]),
+                    &warm_app,
+                    tr(
+                        crate::i18n::current(&warm_app),
+                        "pair.upstream_fail_log",
+                        &[],
+                    ),
                 );
             }
-            push_log(
-                &app,
-                tr(
-                    crate::i18n::current(&app),
-                    "pair.pair_ok_log",
-                    &[&peer.to_string()],
-                ),
-            );
-            return redirect_home_with_session(&token);
-        }
-
-        // 会话 Cookie（浏览器配对）：令牌跟着浏览器走、不跟着 IP 走。
-        // loopback 来源（localhost.run 等隧道把外网流量折叠成 127.0.0.1）与
-        // 局域网直连走同一通道——封死「一台设备配对、全员免检」。
-        let session_ok = extract_pair_cookie(req.headers())
-            .as_deref()
-            .and_then(|t| p.sessions.get(t))
-            .map(|s| s.expires > SystemTime::now())
-            .unwrap_or(false);
-
-        // 顺手清理过期条目（每次访问顺带做，量小）。
-        p.sessions.retain(|_, s| s.expires > SystemTime::now());
-        session_ok
-    };
+        });
+        push_log(
+            &app,
+            tr(
+                crate::i18n::current(&app),
+                "pair.pair_ok_log",
+                &[&peer.to_string()],
+            ),
+        );
+        return redirect_home_with_session(&token);
+    }
     if !trusted {
         // 带上路径与 UA：只看 IP 分不清是「旧配对码被复用」「不带凭据的浏览器请求
         // （manifest 之类）」还是「服务端回调」——三者性质完全不同。
@@ -512,10 +643,10 @@ async fn handle_request(
 
     // dsh 0.1.2+ 的 /api 认证：手机浏览器没有上游的会话 cookie，由网关代持并
     // 注入（缓存命中时开销可忽略）。
-    let cookie = upstream::ensure_cookie(&app, upstream);
+    let cookie = ensure_cookie_async(&app, upstream).await;
 
     if is_upgrade_request(req.headers()) {
-        return handle_upgrade(req, upstream, cookie.as_deref()).await;
+        return handle_upgrade(req, upstream, cookie.as_deref(), session_cancel).await;
     }
     let res = forward_regular(req, client, upstream, cookie.as_deref()).await;
     if res.status() == StatusCode::UNAUTHORIZED {
@@ -568,6 +699,9 @@ pub fn regen(app: &AppHandle) -> Result<PairingInfo, String> {
         let mut p = crate::state::lock(&state.pairing);
         rotate_code(&mut p);
         new_code = p.code.clone();
+        for session in p.sessions.values() {
+            session.revoked.store(true, Ordering::SeqCst);
+        }
         p.sessions.clear();
     }
     push_log(

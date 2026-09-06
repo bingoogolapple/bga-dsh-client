@@ -61,10 +61,16 @@ pub(crate) fn query_has_pair(target: &str, code: &str) -> bool {
     let Some(query) = target.split_once('?').map(|(_, q)| q) else {
         return false;
     };
-    query.split('&').any(|kv| {
+    let mut matches = 0;
+    let mut found = false;
+    for kv in query.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-        k == "pair" && v == code
-    })
+        if k == "pair" {
+            matches += 1;
+            found |= v == code;
+        }
+    }
+    matches == 1 && found
 }
 
 /// 是否为 WebSocket（或任意 Connection: upgrade）升级请求。

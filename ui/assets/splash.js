@@ -47,6 +47,7 @@
   }
 
   let wasRunning = false;
+  let lastStatusRevision = -1;
   let reloadOnRunning = false;
   let restartInProgress = false;
   let frameRetryTimers = [];
@@ -75,6 +76,12 @@
   });
 
   function apply(info) {
+    // The event stream and query_status may race. ServiceInfo.revision is the
+    // monotonic snapshot generation; stale events must not overwrite a newer
+    // lifecycle state in the splash screen.
+    const revision = Number.isFinite(info?.revision) ? info.revision : 0;
+    if (revision < lastStatusRevision) return;
+    lastStatusRevision = revision;
     const running = info.state === "running";
     els.pill.textContent = stateLabel(info.state);
     els.pill.dataset.state = info.state;
@@ -100,7 +107,10 @@
       // During an explicit restart keep the old document visible until the
       // replacement service is ready. Clearing the iframe here causes a
       // visible blank flash, especially with slower legacy dsh versions.
-      if (restartInProgress) return;
+      // 只有启动中的短暂过渡保留旧页面；失败/停止必须结束过渡，
+      // 否则用户会看到已断开的 iframe 而拿不到重试入口。
+      if (restartInProgress && info.state === "starting") return;
+      restartInProgress = false;
       els.frameWrap.classList.add("hidden");
       els.frame.setAttribute("src", "about:blank");
       els.splash.classList.remove("hidden");
