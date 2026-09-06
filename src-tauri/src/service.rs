@@ -1389,7 +1389,7 @@ fn process_command(pid: u32) -> Option<String> {
         ])
         .output()
         .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_owned())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
 fn process_identity_matches(pid: u32, saved: &str) -> bool {
