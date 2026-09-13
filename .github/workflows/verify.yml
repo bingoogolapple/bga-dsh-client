@@ -1,0 +1,88 @@
+name: Verify
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97
+          components: rustfmt, clippy
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Rust lint
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Frontend lint
+        run: pnpm run lint
+      - name: Frontend format check
+        run: pnpm run format:check
+      - name: Dependency audit
+        uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src-tauri
+          ignore: RUSTSEC-2024-0413,RUSTSEC-2024-0416,RUSTSEC-2024-0412,RUSTSEC-2024-0418,RUSTSEC-2024-0411,RUSTSEC-2024-0417,RUSTSEC-2024-0414,RUSTSEC-2024-0415,RUSTSEC-2024-0420,RUSTSEC-2024-0419,RUSTSEC-2024-0370,RUSTSEC-2025-0081,RUSTSEC-2025-0075,RUSTSEC-2025-0080,RUSTSEC-2025-0100,RUSTSEC-2025-0098,RUSTSEC-2024-0429
+
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97
+          targets: ${{ matrix.target }}
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev
+      - name: Compile platform tests
+        working-directory: src-tauri
+        run: cargo test --target ${{ matrix.target }} --no-run --locked
