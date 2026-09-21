@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::menu::{IconMenuItem, Menu, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager};
 
 use crate::i18n::{tr, Locale};
 use crate::service::{ServiceInfo, ServiceState};
@@ -223,7 +223,7 @@ pub fn open_settings(app: &AppHandle) {
 
 /// 打开（或聚焦）设置窗口并切换到指定面板（`panel` 为空串时不切换，保留当前状态）。
 /// - 窗口已存在：show + focus 后 eval 调用前端 `window.__openPanel(panel)` 切换；
-/// - 窗口不存在：以 `settings.html?panel=<panel>` 创建，前端启动时解析 URL 切换。
+/// - 设置窗口由各平台 Tauri 配置预创建并隐藏；此处只负责显示、聚焦与切换面板。
 pub fn open_settings_panel(app: &AppHandle, panel: &str) {
     let locale = crate::i18n::current(app);
     if let Some(w) = app.get_webview_window("settings") {
@@ -239,23 +239,7 @@ pub fn open_settings_panel(app: &AppHandle, panel: &str) {
         }
         return;
     }
-    let url = if panel.is_empty() {
-        "settings.html".to_string()
-    } else {
-        // 新建窗口：URL 携带目标面板，前端启动时解析并切换。
-        format!("settings.html?panel={panel}")
-    };
-    if let Ok(w) = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
-        .title(tr(locale, "win.settings_title", &[]))
-        .inner_size(1080.0, 760.0)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .build()
-    {
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    eprintln!("settings window is missing from the platform Tauri configuration");
 }
 
 /// 按当前语言刷新托盘菜单文案与设置窗口标题（语言切换时由 i18n watcher 调用）。

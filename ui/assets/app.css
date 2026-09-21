@@ -311,6 +311,10 @@ code {
   background: var(--bg);
 }
 
+.platform-windows #app-shell {
+  border-radius: 0;
+}
+
 body.win-fullscreen #app-shell {
   border-radius: 0;
 }

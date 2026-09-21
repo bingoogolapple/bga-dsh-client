@@ -4,11 +4,14 @@
    是设计使然。每个符号都已逐个 grep 确认被跨文件引用；新增符号请同步维护
    eslint.config.mjs 的 crossFileExports 列表。 */
 
-// Production uses `tauri.localhost`, so use the hostname form to keep dsh's
-// SameSite=Strict auth cookie same-site. The Vite dev window runs on a real
-// localhost port and keeps the numeric host expected by dsh's dev flow.
-const DSH_HOST = location.hostname === "localhost" && location.port ? "127.0.0.1" : "localhost";
-const DSH_URL = `http://${DSH_HOST}:3080`;
+// Keep development and packaged builds on the exact loopback authority printed
+// by dsh. Its authentication cookie is authority-bound, so changing only the
+// packaged build to `localhost` creates a separate browser session.
+const DSH_URL = "http://127.0.0.1:3080";
+
+if (/Windows/i.test(navigator.userAgent)) {
+  document.body.classList.add("platform-windows");
+}
 
 /** 确认对话框的静态 DOM 骨架（纯字面量，不含任何外部数据）。
  *  所有动态文本都在创建后通过 textContent 写入，见 confirmDialog()。 */
@@ -134,7 +137,15 @@ function confirmDialog(message, opts) {
   const win = w.getCurrentWindow();
   $("btn-win-close").addEventListener("click", () => win.close().catch(() => {}));
   $("btn-win-min").addEventListener("click", () => win.minimize().catch(() => {}));
-  $("btn-win-full").addEventListener("click", () => win.toggleFullscreen().catch(() => {}));
+  $("btn-win-full").addEventListener("click", async () => {
+    try {
+      const fullscreen = await win.isFullscreen();
+      await win.setFullscreen(!fullscreen);
+      document.body.classList.toggle("win-fullscreen", !fullscreen);
+    } catch (error) {
+      console.error("Failed to toggle fullscreen", error);
+    }
+  });
   const syncFullscreen = () =>
     win
       .isFullscreen()

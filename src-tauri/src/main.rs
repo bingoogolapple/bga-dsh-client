@@ -60,6 +60,7 @@ pub struct AppState {
     pub pairing: Mutex<Pairing>,
     /// 新版 dsh 的进程启动令牌（从 service.log 的启动行解析；每个 dsh 进程一变）。
     pub dsh_token: Mutex<Option<String>>,
+    pub dsh_session_token: Mutex<Option<String>>,
     /// 设置页左下角版本信息缓存（磁盘 version-cache.json + 内存渲染快照）。
     /// get_version_info 秒回缓存，后台线程异步完整探测后刷新。
     pub version_cache: Mutex<VersionCache>,
@@ -207,14 +208,16 @@ async fn dsh_launch_url(app: tauri::AppHandle) -> String {
         return service::launch_url(None);
     }
     // 历史日志回填或尾随线程已经抓到令牌时无需等待。
-    if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
-        return service::launch_url(Some(&token));
+    let cached_token = { crate::state::lock(&state.dsh_token).clone() };
+    if let Some(token) = cached_token {
+        return service::install_browser_session(&app, &token).await;
     }
     const TOKEN_WAIT: Duration = Duration::from_secs(6);
     let deadline = Instant::now() + TOKEN_WAIT;
     loop {
-        if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
-            return service::launch_url(Some(&token));
+        let captured_token = { crate::state::lock(&state.dsh_token).clone() };
+        if let Some(token) = captured_token {
+            return service::install_browser_session(&app, &token).await;
         }
         if !ServiceManager::is_up() || Instant::now() >= deadline {
             return service::launch_url(None);
@@ -272,6 +275,18 @@ fn open_settings_window(app: tauri::AppHandle) {
     tray::open_settings(&app);
 }
 
+/// Create a Windows child process without flashing a console window from the
+/// GUI subsystem application. Used by all background command probes/actions.
+#[cfg(windows)]
+pub(crate) fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -285,9 +300,7 @@ pub fn open_url(url: &str) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
+    let _ = hidden_command("cmd").args(["/C", "start", "", url]).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
@@ -309,6 +322,7 @@ fn main() {
             tray: Mutex::new(None),
             pairing: Mutex::new(Pairing::new()),
             dsh_token: Mutex::new(None),
+            dsh_session_token: Mutex::new(None),
             version_cache: Mutex::new(VersionCache::new()),
         })
         .invoke_handler(tauri::generate_handler![

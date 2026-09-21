@@ -419,7 +419,9 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
 
     // 带超时 + 管道防死锁的 subprocess 执行（与 version::run_capture 同模式）
     use std::io::Read;
-    use std::process::{Command, Stdio};
+    #[cfg(not(windows))]
+    use std::process::Command;
+    use std::process::Stdio;
     use std::time::Instant;
 
     #[cfg(not(windows))]
@@ -434,7 +436,7 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
         .spawn()
         .map_err(|e| format!("npm 进程启动失败: {}", e))?;
     #[cfg(windows)]
-    let mut child = Command::new("cmd")
+    let mut child = crate::hidden_command("cmd")
         .arg("/C")
         .arg(&cmd)
         .current_dir(target)

@@ -9,7 +9,9 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(unix)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -175,7 +177,7 @@ impl ServiceManager {
         let mine = starting || child.is_some() || orphan.is_some() || external_pid.is_some();
         let state = if starting {
             ServiceState::Starting
-        } else if child.is_some() || Self::is_up() {
+        } else if Self::is_up() {
             ServiceState::Running
         } else if self.failed.load(Ordering::SeqCst) {
             ServiceState::Error
@@ -1112,6 +1114,7 @@ pub(crate) fn scrub_launch_tokens(app: &AppHandle) {
 /// 服务已下线：进程令牌随之作废（下一个进程会打印新令牌），内存与磁盘都不留残余。
 pub(crate) fn forget_launch_token(app: &AppHandle) {
     *crate::state::lock(&app.state::<AppState>().dsh_token) = None;
+    *crate::state::lock(&app.state::<AppState>().dsh_session_token) = None;
     let _ = std::fs::remove_file(launch_token_path(app));
 }
 
@@ -1134,18 +1137,77 @@ fn resync_log_offset(file: &mut std::fs::File) {
 /// 令牌随即从地址栏消失；没有令牌（旧版 dsh、外部服务、日志已轮转）就用裸
 /// 地址——此前换过的 cookie 仍在有效期内时一样能进。
 pub(crate) fn launch_url(token: Option<&str>) -> String {
-    // The Vite dev window uses localhost and dsh's dev flow expects the
-    // numeric loopback authority. Production uses tauri.localhost, where the
-    // hostname form is required for the SameSite=Strict auth cookie.
-    let host = if cfg!(debug_assertions) {
-        "127.0.0.1"
-    } else {
-        "localhost"
-    };
-    let base = format!("http://{host}:{DSH_PORT}");
+    // Use the exact authority printed by dsh in both debug and release builds.
+    // Browser-auth cookies are bound to hostname + port.
+    let base = format!("http://127.0.0.1:{DSH_PORT}");
     match token {
         Some(t) if !t.is_empty() => format!("{base}/?token={t}"),
         _ => base,
+    }
+}
+
+/// Exchange the process launch token outside the iframe and install the
+/// resulting HttpOnly cookie directly into the main WebView. Packaged WebView2
+/// can reject a Set-Cookie received by a cross-origin iframe even though the
+/// same navigation works under the development server.
+pub(crate) async fn install_browser_session(app: &AppHandle, token: &str) -> String {
+    use reqwest::header::SET_COOKIE;
+
+    let already_installed = {
+        crate::state::lock(&app.state::<AppState>().dsh_session_token).as_deref() == Some(token)
+    };
+    if already_installed {
+        return launch_url(None);
+    }
+
+    let token_url = launch_url(Some(token));
+    let request_url = token_url.clone();
+    let cookie = tokio::task::spawn_blocking(move || {
+        reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .and_then(|client| client.get(&request_url).send())
+            .ok()
+            .filter(|response| response.status().is_redirection())
+            .and_then(|response| {
+                response
+                    .headers()
+                    .get(SET_COOKIE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned)
+            })
+            .and_then(|header| tauri::webview::Cookie::parse(header).ok())
+            .map(|cookie| cookie.into_owned())
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let installed = cookie
+        .and_then(|mut cookie| {
+            // DSH intentionally emits a host-only cookie. WebView2's native
+            // cookie API requires the destination domain to be explicit. Its
+            // original SameSite=Strict attribute is correct for a standalone
+            // browser tab but is never sent by the packaged app's cross-site
+            // iframe (tauri.localhost -> 127.0.0.1). The signed value and
+            // authority remain unchanged; only browser delivery is relaxed.
+            cookie.set_domain("127.0.0.1");
+            cookie.set_path("/");
+            cookie.set_same_site(tauri::webview::cookie::SameSite::None);
+            cookie.set_secure(true);
+            app.get_webview_window("main")
+                .and_then(|window| window.set_cookie(cookie).ok())
+        })
+        .is_some();
+
+    if installed {
+        *crate::state::lock(&app.state::<AppState>().dsh_session_token) = Some(token.to_owned());
+        launch_url(None)
+    } else {
+        // Preserve the browser-based exchange as a safe fallback on platforms
+        // where the native cookie store is unavailable.
+        token_url
     }
 }
 
@@ -1338,14 +1400,26 @@ fn spawn_shell(cmd: &str, cwd: Option<&str>, log_path: &std::path::Path) -> std:
 }
 
 #[cfg(windows)]
+fn windows_shell_command(cmd: &str) -> String {
+    if cmd.starts_with('"') {
+        format!("\"{cmd}\"")
+    } else {
+        cmd.to_owned()
+    }
+}
+
+#[cfg(windows)]
 fn spawn_shell(cmd: &str, cwd: Option<&str>, log_path: &std::path::Path) -> std::io::Result<Child> {
+    use std::os::windows::process::CommandExt;
+
     let out = OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)?;
     let err = out.try_clone()?;
-    let mut c = Command::new("cmd");
-    c.arg("/C").arg(cmd);
+    let mut c = crate::hidden_command("cmd");
+    c.args(["/D", "/S", "/C"])
+        .raw_arg(windows_shell_command(cmd));
     c.stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
@@ -1379,7 +1453,7 @@ fn process_command(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 fn process_command(pid: u32) -> Option<String> {
-    Command::new("wmic")
+    crate::hidden_command("wmic")
         .args([
             "process",
             "where",
@@ -1389,12 +1463,16 @@ fn process_command(pid: u32) -> Option<String> {
         ])
         .output()
         .ok()
+        .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
 fn process_identity_matches(pid: u32, saved: &str) -> bool {
     let Some(current) = process_command(pid) else {
-        return false;
+        // WMIC is an optional Windows feature and is absent on current Windows
+        // 11 installations. The stricter listener PID + HTTP fingerprint check
+        // in process_is_dsh still prevents adopting an unrelated process.
+        return process_is_dsh(pid);
     };
     let current = current.to_lowercase();
     let saved = saved.to_lowercase();
@@ -1418,7 +1496,14 @@ fn process_is_dsh(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn process_is_dsh(pid: u32) -> bool {
-    let out = Command::new("wmic")
+    // Prefer an application-level identity check. It remains available on
+    // modern Windows where WMIC was removed, and ties the fingerprint to the
+    // exact process that owns the listening port.
+    if port_listener_pid() == Some(pid) && dsh_http_fingerprint() {
+        return true;
+    }
+
+    let out = crate::hidden_command("wmic")
         .args([
             "process",
             "where",
@@ -1428,17 +1513,57 @@ fn process_is_dsh(pid: u32) -> bool {
         ])
         .output();
     match out {
-        Ok(o) => {
+        Ok(o) if o.status.success() => {
             let cmd = String::from_utf8_lossy(&o.stdout).to_lowercase();
             cmd.contains("deepseek") || cmd.contains("dsh") || cmd.contains("npx")
         }
         Err(_) => false,
+        _ => false,
     }
 }
 
 #[cfg(windows)]
+fn dsh_http_fingerprint() -> bool {
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], DSH_PORT)),
+        Duration::from_millis(400),
+    ) else {
+        return false;
+    };
+    let timeout = Duration::from_millis(700);
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    if stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:3080\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut response = Vec::with_capacity(2048);
+    let mut chunk = [0_u8; 1024];
+    while response.len() < 4096 {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                response.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&response).to_lowercase();
+                if text.contains("dsh web authentication required")
+                    || text.contains("<title>dsh")
+                    || text.contains("deepseek-ai/dsh")
+                {
+                    return true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
-    let out = Command::new("tasklist")
+    let out = crate::hidden_command("tasklist")
         .args(["/FI", &format!("PID eq {pid}")])
         .output();
     match out {
@@ -1492,7 +1617,10 @@ fn port_listener_pid() -> Option<u32> {
 
 #[cfg(windows)]
 fn port_listener_pid() -> Option<u32> {
-    let out = Command::new("netstat").args(["-ano"]).output().ok()?;
+    let out = crate::hidden_command("netstat")
+        .args(["-ano"])
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     // 行形如 "  TCP   127.0.0.1:3080   0.0.0.0:0   LISTENING   12345"
     text.lines()
@@ -1502,7 +1630,7 @@ fn port_listener_pid() -> Option<u32> {
 
 #[cfg(windows)]
 fn kill_group(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = crate::hidden_command("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status();
 }
@@ -1648,5 +1776,15 @@ mod tests {
         assert!(!is_legacy_without_launch_token("0.1.10"));
         assert!(!is_legacy_without_launch_token("0.1.2-alpha.1"));
         assert!(!is_legacy_without_launch_token("0.1.2"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_wraps_a_quoted_executable_for_cmd_c() {
+        let cmd = r#""node" "C:\Program Files\dsh\bin.js" web --no-open"#;
+        assert_eq!(
+            windows_shell_command(cmd),
+            "\"\"node\" \"C:\\Program Files\\dsh\\bin.js\" web --no-open\""
+        );
     }
 }
