@@ -71,7 +71,11 @@
     </section>
 
     <section id="frame-wrap" class="hidden">
-      <iframe id="frame" src="about:blank" title="DSH Web GUI"></iframe>
+      <!-- 跨源 iframe 默认不继承 clipboard-write：DSH 的复制按钮走
+           navigator.clipboard.writeText，被 Permissions Policy 拒绝后直接返回失败
+           （ui-primitives 的 writeClipboard 只在 API 不存在时才退回 execCommand），
+           所以这里显式委派该权限。 -->
+      <iframe id="frame" src="about:blank" title="DSH Web GUI" allow="clipboard-write"></iframe>
     </section>
   </main>
   </div>

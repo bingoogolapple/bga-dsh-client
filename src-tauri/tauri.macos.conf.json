@@ -4,6 +4,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "DeepSeekHarness",
         "width": 1900,
         "height": 1100,

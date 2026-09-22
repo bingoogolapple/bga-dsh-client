@@ -296,11 +296,21 @@ fn show_main_window(app: tauri::AppHandle) {
 }
 
 /// 用系统默认方式打开 URL（浏览器）。
+///
+/// Windows 走 `cmd /C start`，而 cmd 会自己解析整条命令行：不带空格的 URL 不会被
+/// std 加引号，其中的 `&`/`|`/`<`/`>` 会被当成命令分隔符把链接截断。外链现在都从
+/// 这里走（见主窗口的 `on_new_window`），所以整体加引号并用 `raw_arg` 原样交给 cmd。
 pub fn open_url(url: &str) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let _ = hidden_command("cmd").args(["/C", "start", "", url]).spawn();
+    {
+        use std::os::windows::process::CommandExt;
+        let quoted = url.replace('"', "%22");
+        let _ = hidden_command("cmd")
+            .raw_arg(format!("/C start \"\" \"{quoted}\""))
+            .spawn();
+    }
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
@@ -375,6 +385,29 @@ fn main() {
             }
         })
         .setup(|app| {
+            // 主窗口在 Tauri 配置里声明为 `create: false`（只当模板），在这里手动构建，
+            // 唯一目的是挂上 `on_new_window`。
+            //
+            // 主窗口内嵌的是 http://127.0.0.1:3080 的 DSH Web GUI（跨源 iframe）。页面里的
+            // `target="_blank"` / `window.open` 会变成 webview 的新窗口请求，而 wry 在没有
+            // 处理器时直接 `SetHandled(true)` 把它们吞掉——表现就是「点了没反应」。
+            // 这里改成用系统浏览器打开，再拒绝在应用内建窗：聊天里的 Markdown 外链和插件
+            // 里的链接一并生效，也不必给远程源开 IPC 权限（那是更大的口子）。
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == "main")
+                .cloned()
+                .expect("Tauri 配置里缺少 label = main 的窗口");
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                .on_new_window(|url, _features| {
+                    crate::open_url(url.as_str());
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .build()?;
+
             let handle = app.handle().clone();
 
             // 设置文件：<home>/.dsh/bga-dsh-client/settings.json。
