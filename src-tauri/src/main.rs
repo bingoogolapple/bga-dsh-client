@@ -60,6 +60,7 @@ pub struct AppState {
     pub pairing: Mutex<Pairing>,
     /// 新版 dsh 的进程启动令牌（从 service.log 的启动行解析；每个 dsh 进程一变）。
     pub dsh_token: Mutex<Option<String>>,
+    pub dsh_session_token: Mutex<Option<String>>,
     /// 设置页左下角版本信息缓存（磁盘 version-cache.json + 内存渲染快照）。
     /// get_version_info 秒回缓存，后台线程异步完整探测后刷新。
     pub version_cache: Mutex<VersionCache>,
@@ -190,10 +191,11 @@ fn service_stop(app: tauri::AppHandle) {
 #[tauri::command]
 async fn dsh_launch_url(app: tauri::AppHandle) -> String {
     let state = app.state::<AppState>();
-    // 外部服务的输出不在本应用日志中：即使磁盘上有上一次服务的
-    // token，也不能把它误认为当前服务的 token。旧版 dsh（< 0.1.2-alpha.1）
-    // 没有 token，直接使用裸地址即可。
-    if !state.sm.info(&app).mine {
+    // 生产包从 Finder 启动时环境变量更精简，端口进程识别可能暂时失败；
+    // 不要因此丢弃已经从本次服务日志/令牌文件解析出的 token。只要 dsh
+    // 在线，带 token 的 URL 才能完成首次认证；没有 token 时才退回裸地址。
+    let service_online = ServiceManager::is_up();
+    if !service_online {
         return service::launch_url(None);
     }
     // dsh only started printing a browser launch token in 0.1.2-alpha.1.
@@ -207,14 +209,16 @@ async fn dsh_launch_url(app: tauri::AppHandle) -> String {
         return service::launch_url(None);
     }
     // 历史日志回填或尾随线程已经抓到令牌时无需等待。
-    if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
-        return service::launch_url(Some(&token));
+    let cached_token = { crate::state::lock(&state.dsh_token).clone() };
+    if let Some(token) = cached_token {
+        return service::install_browser_session(&app, &token).await;
     }
     const TOKEN_WAIT: Duration = Duration::from_secs(6);
     let deadline = Instant::now() + TOKEN_WAIT;
     loop {
-        if let Some(token) = crate::state::lock(&state.dsh_token).clone() {
-            return service::launch_url(Some(&token));
+        let captured_token = { crate::state::lock(&state.dsh_token).clone() };
+        if let Some(token) = captured_token {
+            return service::install_browser_session(&app, &token).await;
         }
         if !ServiceManager::is_up() || Instant::now() >= deadline {
             return service::launch_url(None);
@@ -272,6 +276,18 @@ fn open_settings_window(app: tauri::AppHandle) {
     tray::open_settings(&app);
 }
 
+/// Create a Windows child process without flashing a console window from the
+/// GUI subsystem application. Used by all background command probes/actions.
+#[cfg(windows)]
+pub(crate) fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -281,15 +297,28 @@ fn show_main_window(app: tauri::AppHandle) {
 }
 
 /// 用系统默认方式打开 URL（浏览器）。
+///
+/// Windows 走 `cmd /C start`，而 cmd 会自己解析整条命令行：不带空格的 URL 不会被
+/// std 加引号，其中的 `&`/`|`/`<`/`>` 会被当成命令分隔符把链接截断。外链现在都从
+/// 这里走（见主窗口的 `on_new_window`），所以整体加引号并用 `raw_arg` 原样交给 cmd。
 pub fn open_url(url: &str) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
+    {
+        use std::os::windows::process::CommandExt;
+        let quoted = url.replace('"', "%22");
+        let _ = hidden_command("cmd")
+            .raw_arg(format!("/C start \"\" \"{quoted}\""))
+            .spawn();
+    }
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+#[tauri::command]
+fn open_dsh_in_browser() {
+    open_url(&format!("http://127.0.0.1:{}", service::DSH_PORT));
 }
 
 /// OpenCode Go 邀请链接（含作者推荐码，经此链接订阅双方各得 $5 额度）。
@@ -309,6 +338,7 @@ fn main() {
             tray: Mutex::new(None),
             pairing: Mutex::new(Pairing::new()),
             dsh_token: Mutex::new(None),
+            dsh_session_token: Mutex::new(None),
             version_cache: Mutex::new(VersionCache::new()),
         })
         .invoke_handler(tauri::generate_handler![
@@ -330,6 +360,7 @@ fn main() {
             get_update_info,
             check_for_update,
             open_download_page,
+            open_dsh_in_browser,
             dismiss_update,
             open_opencode_ref,
             open_settings_window,
@@ -361,6 +392,35 @@ fn main() {
             }
         })
         .setup(|app| {
+            // 主窗口在 Tauri 配置里声明为 `create: false`（只当模板），在这里手动构建，
+            // 唯一目的是挂上 `on_new_window`。
+            //
+            // 主窗口内嵌的是 http://127.0.0.1:3080 的 DSH Web GUI（跨源 iframe）。页面里的
+            // `target="_blank"` / `window.open` 会变成 webview 的新窗口请求，而 wry 在没有
+            // 处理器时直接 `SetHandled(true)` 把它们吞掉——表现就是「点了没反应」。
+            // 这里改成用系统浏览器打开，再拒绝在应用内建窗：聊天里的 Markdown 外链和插件
+            // 里的链接一并生效，也不必给远程源开 IPC 权限（那是更大的口子）。
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == "main")
+                .cloned()
+                .expect("Tauri 配置里缺少 label = main 的窗口");
+            // The executable icon is enough for a directly launched binary,
+            // but Windows can leave a window created by the NSIS-installed
+            // app without a taskbar icon unless the window icon is explicit.
+            let window_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                .icon(window_icon)?
+                .on_new_window(|url, _features| {
+                    crate::open_url(url.as_str());
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .build()?;
+
             let handle = app.handle().clone();
 
             // 设置文件：<home>/.dsh/bga-dsh-client/settings.json。

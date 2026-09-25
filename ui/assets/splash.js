@@ -12,6 +12,7 @@
     btnStart: $("btn-start"),
     btnRetry: $("btn-retry"),
     btnSettings: $("btn-settings"),
+    btnOpenBrowser: $("btn-open-browser"),
     btnRefresh: $("btn-refresh"),
   };
 
@@ -20,10 +21,10 @@
 
   // 服务每次启动都会换一个新的启动令牌，所以地址要每轮都问一次；是否真的
   // 重新加载由 loadFrame 判断（地址没变就不动，令牌没抓到时不降级）。
-  let frameSeq = 0;
+  let frameGeneration = 0;
 
   async function loadFrame(force = false) {
-    const seq = ++frameSeq;
+    const generation = frameGeneration;
     let url = DSH_URL;
     try {
       url = await invoke("dsh_launch_url");
@@ -31,7 +32,7 @@
       /* Tauri IPC 尚未就绪：退回常量地址。 */
     }
     // apply 可能已被更新的调用重新进入（poll 与事件并发），丢弃过期结果。
-    if (seq !== frameSeq) return;
+    if (generation !== frameGeneration) return;
     const src = els.frame.getAttribute("src") || "";
     if (!force && src === url) return;
     // 新地址不带令牌，说明本次启动的令牌还没抓到（或这就是旧版 dsh）。
@@ -52,23 +53,21 @@
   let restartInProgress = false;
   let frameRetryTimers = [];
 
-  els.frame.addEventListener("load", () => {
-    for (const timer of frameRetryTimers) clearTimeout(timer);
-    frameRetryTimers = [];
-  });
-
   function retryFrameLoads() {
-    // Legacy dsh may report running before its HTTP server is ready.
+    // A 401 response also fires iframe "load", so it cannot be treated as a
+    // successful authenticated page. Re-query the launch URL after startup;
+    // loadFrame(false) navigates only when a newly captured token changes it.
     for (const delay of [1000, 3000]) {
       frameRetryTimers.push(
         setTimeout(() => {
-          if (wasRunning) loadFrame(true);
+          if (wasRunning) loadFrame(false);
         }, delay),
       );
     }
   }
 
   listen("service-restarting", () => {
+    frameGeneration += 1;
     reloadOnRunning = true;
     restartInProgress = true;
     for (const timer of frameRetryTimers) clearTimeout(timer);
@@ -103,6 +102,7 @@
       els.frameWrap.classList.remove("hidden");
       els.splash.classList.add("hidden");
     } else {
+      if (wasRunning) frameGeneration += 1;
       wasRunning = false;
       // During an explicit restart keep the old document visible until the
       // replacement service is ready. Clearing the iframe here causes a
@@ -152,6 +152,7 @@
   els.btnStart.onclick = () => invoke("service_start");
   els.btnRetry.onclick = () => invoke("service_start");
   els.btnSettings.onclick = () => invoke("open_settings_window");
+  els.btnOpenBrowser.onclick = () => invoke("open_dsh_in_browser");
   els.btnRefresh.onclick = () => location.reload();
 
   async function poll() {

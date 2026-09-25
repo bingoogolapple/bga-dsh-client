@@ -1,7 +1,7 @@
 # DeepSeek Harness 客户端
 
 [![Latest Release](https://img.shields.io/github/v/release/bingoogolapple/bga-dsh-client)](../../releases/latest)
-[![Bundled DSH](https://img.shields.io/badge/dsh-0.1.5--rc.2-4D6BFE)](scripts/bundle-runtime.mjs)
+[![Bundled DSH](https://img.shields.io/badge/dsh-0.1.7--rc.2-4D6BFE)](scripts/bundle-runtime.mjs)
 [![Bundled Node](https://img.shields.io/badge/node-v24.20.0-339933)](scripts/bundle-runtime.mjs)
 [![Bundled pnpm](https://img.shields.io/badge/pnpm-11.25.0-F69220)](scripts/bundle-runtime.mjs)
 [![Build](https://img.shields.io/github/actions/workflow/status/bingoogolapple/bga-dsh-client/release.yml)](../../actions/workflows/release.yml)

@@ -146,6 +146,12 @@ fn run_capture(
     use std::process::{Command, Stdio};
 
     let mut builder = Command::new(prog);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        builder.creation_flags(CREATE_NO_WINDOW);
+    }
     builder.args(args);
     #[cfg(not(windows))]
     if let Some(path) = _extra_path {

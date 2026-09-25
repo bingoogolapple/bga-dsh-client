@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "DeepSeekHarness",
+        "width": 1200,
+        "height": 733,
+        "minWidth": 960,
+        "minHeight": 600,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#f5f7fc"
+      },
+      {
+        "label": "settings",
+        "title": "DeepSeekHarness Settings",
+        "url": "settings.html",
+        "width": 933,
+        "height": 507,
+        "center": true,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#f5f7fc",
+        "visible": false,
+        "focus": false
+      }
+    ]
+  }
+}
