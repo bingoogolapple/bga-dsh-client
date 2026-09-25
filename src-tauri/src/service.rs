@@ -1168,7 +1168,7 @@ pub(crate) async fn install_browser_session(app: &AppHandle, token: &str) -> Str
     // needs the native-cookie workaround below.
     #[cfg(not(windows))]
     {
-        return launch_url(Some(token));
+        launch_url(Some(token))
     }
 
     #[cfg(windows)]
