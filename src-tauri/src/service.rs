@@ -1209,13 +1209,16 @@ pub(crate) async fn install_browser_session(app: &AppHandle, token: &str) -> Str
         let installed = cookie
             .and_then(|mut cookie| {
                 // DSH intentionally emits a host-only cookie. WebView2's native
-                // cookie API requires the destination domain to be explicit. On
-                // Windows, the packaged WebView2 iframe is cross-site
-                // (tauri.localhost -> 127.0.0.1), so relax SameSite there. Do not
-                // apply that workaround on macOS: the service is plain HTTP and
-                // WKWebView rejects a Secure cookie for an HTTP origin. Keeping
-                // the attributes returned by dsh is required for macOS auth.
-                cookie.set_domain("127.0.0.1");
+                // cookie API requires the destination domain to be explicit.
+                // It must match `launch_url`: dev uses 127.0.0.1, release uses
+                // localhost. Otherwise the iframe requests a different host
+                // and the cookie is not sent, resulting in a 401.
+                let cookie_domain = if cfg!(debug_assertions) {
+                    "127.0.0.1"
+                } else {
+                    "localhost"
+                };
+                cookie.set_domain(cookie_domain);
                 cookie.set_path("/");
                 #[cfg(windows)]
                 {
