@@ -408,7 +408,13 @@ fn main() {
                 .find(|config| config.label == "main")
                 .cloned()
                 .expect("Tauri 配置里缺少 label = main 的窗口");
+            // The executable icon is enough for a directly launched binary,
+            // but Windows can leave a window created by the NSIS-installed
+            // app without a taskbar icon unless the window icon is explicit.
+            let window_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?;
             tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                .icon(window_icon)?
                 .on_new_window(|url, _features| {
                     crate::open_url(url.as_str());
                     tauri::webview::NewWindowResponse::Deny
