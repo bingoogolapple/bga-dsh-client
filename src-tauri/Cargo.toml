@@ -1,6 +1,6 @@
 [package]
 name = "bga-dsh-client"
-version = "0.0.10"
+version = "0.0.11"
 description = "DSH Web GUI 的 Tauri 桌面壳"
 license = "MIT"
 edition = "2021"

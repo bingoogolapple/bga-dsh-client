@@ -1137,9 +1137,17 @@ fn resync_log_offset(file: &mut std::fs::File) {
 /// 令牌随即从地址栏消失；没有令牌（旧版 dsh、外部服务、日志已轮转）就用裸
 /// 地址——此前换过的 cookie 仍在有效期内时一样能进。
 pub(crate) fn launch_url(token: Option<&str>) -> String {
-    // Use the exact authority printed by dsh in both debug and release builds.
-    // Browser-auth cookies are bound to hostname + port.
-    let base = format!("http://127.0.0.1:{DSH_PORT}");
+    // 注意：dev 与 release 必须使用不同 Host，不能为了“统一”而改成同一个：
+    // - dev：Vite/dsh 开发流程使用数值回环地址 127.0.0.1；
+    // - release：Tauri 页面来源是 tauri.localhost，必须使用 localhost，
+    //   才能让 dsh 的 SameSite=Strict 认证 Cookie 保持同站并被 WebView 发送。
+    // dsh 的认证 Cookie 绑定 Host，改错任一地址都会导致认证失败。
+    let host = if cfg!(debug_assertions) {
+        "127.0.0.1"
+    } else {
+        "localhost"
+    };
+    let base = format!("http://{host}:{DSH_PORT}");
     match token {
         Some(t) if !t.is_empty() => format!("{base}/?token={t}"),
         _ => base,
@@ -1150,64 +1158,84 @@ pub(crate) fn launch_url(token: Option<&str>) -> String {
 /// resulting HttpOnly cookie directly into the main WebView. Packaged WebView2
 /// can reject a Set-Cookie received by a cross-origin iframe even though the
 /// same navigation works under the development server.
+#[cfg_attr(not(windows), allow(unused_variables))]
 pub(crate) async fn install_browser_session(app: &AppHandle, token: &str) -> String {
-    use reqwest::header::SET_COOKIE;
-
-    let already_installed = {
-        crate::state::lock(&app.state::<AppState>().dsh_session_token).as_deref() == Some(token)
-    };
-    if already_installed {
-        return launch_url(None);
+    // On macOS the WebKit navigation itself must perform the token exchange.
+    // Consuming the one-shot token with reqwest and then relying on the native
+    // cookie store is fragile in packaged WebKit: the cookie may be installed
+    // in a store that the production webview does not use, leaving the iframe
+    // at the bare URL and therefore unauthorized. Windows WebView2 still
+    // needs the native-cookie workaround below.
+    #[cfg(not(windows))]
+    {
+        return launch_url(Some(token));
     }
 
-    let token_url = launch_url(Some(token));
-    let request_url = token_url.clone();
-    let cookie = tokio::task::spawn_blocking(move || {
-        reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(2))
-            .build()
-            .and_then(|client| client.get(&request_url).send())
-            .ok()
-            .filter(|response| response.status().is_redirection())
-            .and_then(|response| {
-                response
-                    .headers()
-                    .get(SET_COOKIE)
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_owned)
-            })
-            .and_then(|header| tauri::webview::Cookie::parse(header).ok())
-            .map(|cookie| cookie.into_owned())
-    })
-    .await
-    .ok()
-    .flatten();
+    #[cfg(windows)]
+    {
+        use reqwest::header::SET_COOKIE;
 
-    let installed = cookie
-        .and_then(|mut cookie| {
-            // DSH intentionally emits a host-only cookie. WebView2's native
-            // cookie API requires the destination domain to be explicit. Its
-            // original SameSite=Strict attribute is correct for a standalone
-            // browser tab but is never sent by the packaged app's cross-site
-            // iframe (tauri.localhost -> 127.0.0.1). The signed value and
-            // authority remain unchanged; only browser delivery is relaxed.
-            cookie.set_domain("127.0.0.1");
-            cookie.set_path("/");
-            cookie.set_same_site(tauri::webview::cookie::SameSite::None);
-            cookie.set_secure(true);
-            app.get_webview_window("main")
-                .and_then(|window| window.set_cookie(cookie).ok())
+        let already_installed = {
+            crate::state::lock(&app.state::<AppState>().dsh_session_token).as_deref() == Some(token)
+        };
+        if already_installed {
+            return launch_url(None);
+        }
+
+        let token_url = launch_url(Some(token));
+        let request_url = token_url.clone();
+        let cookie = tokio::task::spawn_blocking(move || {
+            reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(2))
+                .build()
+                .and_then(|client| client.get(&request_url).send())
+                .ok()
+                .filter(|response| response.status().is_redirection())
+                .and_then(|response| {
+                    response
+                        .headers()
+                        .get(SET_COOKIE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned)
+                })
+                .and_then(|header| tauri::webview::Cookie::parse(header).ok())
+                .map(|cookie| cookie.into_owned())
         })
-        .is_some();
+        .await
+        .ok()
+        .flatten();
 
-    if installed {
-        *crate::state::lock(&app.state::<AppState>().dsh_session_token) = Some(token.to_owned());
-        launch_url(None)
-    } else {
-        // Preserve the browser-based exchange as a safe fallback on platforms
-        // where the native cookie store is unavailable.
-        token_url
+        let installed = cookie
+            .and_then(|mut cookie| {
+                // DSH intentionally emits a host-only cookie. WebView2's native
+                // cookie API requires the destination domain to be explicit. On
+                // Windows, the packaged WebView2 iframe is cross-site
+                // (tauri.localhost -> 127.0.0.1), so relax SameSite there. Do not
+                // apply that workaround on macOS: the service is plain HTTP and
+                // WKWebView rejects a Secure cookie for an HTTP origin. Keeping
+                // the attributes returned by dsh is required for macOS auth.
+                cookie.set_domain("127.0.0.1");
+                cookie.set_path("/");
+                #[cfg(windows)]
+                {
+                    cookie.set_same_site(tauri::webview::cookie::SameSite::None);
+                    cookie.set_secure(true);
+                }
+                app.get_webview_window("main")
+                    .and_then(|window| window.set_cookie(cookie).ok())
+            })
+            .is_some();
+
+        if installed {
+            *crate::state::lock(&app.state::<AppState>().dsh_session_token) =
+                Some(token.to_owned());
+            launch_url(None)
+        } else {
+            // Preserve the browser-based exchange as a safe fallback on platforms
+            // where the native cookie store is unavailable.
+            token_url
+        }
     }
 }
 
@@ -1760,13 +1788,18 @@ mod tests {
     /// 有令牌拼带令牌的地址，没有（旧版 dsh / 外部服务）就退回裸地址。
     #[test]
     fn launch_url_appends_token_only_when_present() {
+        let host = if cfg!(debug_assertions) {
+            "127.0.0.1"
+        } else {
+            "localhost"
+        };
         assert_eq!(
             launch_url(Some("abc")),
-            format!("http://127.0.0.1:{DSH_PORT}/?token=abc")
+            format!("http://{host}:{DSH_PORT}/?token=abc")
         );
-        assert_eq!(launch_url(None), format!("http://127.0.0.1:{DSH_PORT}"));
+        assert_eq!(launch_url(None), format!("http://{host}:{DSH_PORT}"));
         // 空串等同于没有令牌，不能拼出 `?token=` 这种畸形地址。
-        assert_eq!(launch_url(Some("")), format!("http://127.0.0.1:{DSH_PORT}"));
+        assert_eq!(launch_url(Some("")), format!("http://{host}:{DSH_PORT}"));
     }
 
     #[test]

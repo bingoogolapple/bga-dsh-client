@@ -12,6 +12,7 @@
     btnStart: $("btn-start"),
     btnRetry: $("btn-retry"),
     btnSettings: $("btn-settings"),
+    btnOpenBrowser: $("btn-open-browser"),
     btnRefresh: $("btn-refresh"),
   };
 
@@ -151,6 +152,7 @@
   els.btnStart.onclick = () => invoke("service_start");
   els.btnRetry.onclick = () => invoke("service_start");
   els.btnSettings.onclick = () => invoke("open_settings_window");
+  els.btnOpenBrowser.onclick = () => invoke("open_dsh_in_browser");
   els.btnRefresh.onclick = () => location.reload();
 
   async function poll() {

@@ -4,10 +4,12 @@
    是设计使然。每个符号都已逐个 grep 确认被跨文件引用；新增符号请同步维护
    eslint.config.mjs 的 crossFileExports 列表。 */
 
-// Keep development and packaged builds on the exact loopback authority printed
-// by dsh. Its authentication cookie is authority-bound, so changing only the
-// packaged build to `localhost` creates a separate browser session.
-const DSH_URL = "http://127.0.0.1:3080";
+// 注意：dev 与 release 的地址不能统一：
+// - dev 使用 127.0.0.1，符合 Vite/dsh 开发流程；
+// - release 使用 localhost，使 tauri.localhost 与 dsh 保持同站，
+//   否则 SameSite=Strict 认证 Cookie 不会发送。
+const DSH_HOST = location.hostname === "localhost" && location.port ? "127.0.0.1" : "localhost";
+const DSH_URL = `http://${DSH_HOST}:3080`;
 
 if (/Windows/i.test(navigator.userAgent)) {
   document.body.classList.add("platform-windows");

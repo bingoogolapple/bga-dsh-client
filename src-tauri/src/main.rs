@@ -191,10 +191,11 @@ fn service_stop(app: tauri::AppHandle) {
 #[tauri::command]
 async fn dsh_launch_url(app: tauri::AppHandle) -> String {
     let state = app.state::<AppState>();
-    // 外部服务的输出不在本应用日志中：即使磁盘上有上一次服务的
-    // token，也不能把它误认为当前服务的 token。旧版 dsh（< 0.1.2-alpha.1）
-    // 没有 token，直接使用裸地址即可。
-    if !state.sm.info(&app).mine {
+    // 生产包从 Finder 启动时环境变量更精简，端口进程识别可能暂时失败；
+    // 不要因此丢弃已经从本次服务日志/令牌文件解析出的 token。只要 dsh
+    // 在线，带 token 的 URL 才能完成首次认证；没有 token 时才退回裸地址。
+    let service_online = ServiceManager::is_up();
+    if !service_online {
         return service::launch_url(None);
     }
     // dsh only started printing a browser launch token in 0.1.2-alpha.1.
@@ -315,6 +316,11 @@ pub fn open_url(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
+#[tauri::command]
+fn open_dsh_in_browser() {
+    open_url(&format!("http://127.0.0.1:{}", service::DSH_PORT));
+}
+
 /// OpenCode Go 邀请链接（含作者推荐码，经此链接订阅双方各得 $5 额度）。
 const OPENCODE_REF_URL: &str = "https://opencode.ai/go?ref=8CYK5082AG";
 
@@ -354,6 +360,7 @@ fn main() {
             get_update_info,
             check_for_update,
             open_download_page,
+            open_dsh_in_browser,
             dismiss_update,
             open_opencode_ref,
             open_settings_window,
