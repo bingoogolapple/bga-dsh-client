@@ -89,11 +89,14 @@ build_one() {
   mkdir -p "$out_dir"
 
   echo "==> tauri build ($variant)…"
-  if [[ "$variant" == "bundled" ]]; then
-    npm run tauri -- build "${BUNDLE_EXTRA[@]:-}"
-  else
-    npm run tauri -- build
+  local tauri_args=(build)
+  if [[ "${TAURI_BUILD_VERBOSE:-0}" == 1 ]]; then
+    tauri_args+=(--verbose)
   fi
+  if [[ "$variant" == "bundled" ]]; then
+    tauri_args+=("${BUNDLE_EXTRA[@]}")
+  fi
+  npm run tauri -- "${tauri_args[@]}"
 
   bundle_root="src-tauri/target/release/bundle"
   if [[ -d "$bundle_root/macos" ]]; then

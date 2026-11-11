@@ -198,6 +198,8 @@ jobs:
         shell: bash
         env:
           SENTRY_DSN: ${{ github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
+          # Tauri 仅在详细日志中输出 DMG 脚本的 stdout 和 stderr。
+          TAURI_BUILD_VERBOSE: ${{ matrix.platform == 'macos-15-intel' && '1' || '0' }}
         run: ./scripts/build-release.sh two
 
       # 发布门禁：构建脚本即使某个 Tauri bundler 没有产物也可能返回成功（例如
