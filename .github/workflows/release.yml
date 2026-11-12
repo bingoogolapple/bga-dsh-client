@@ -32,8 +32,8 @@ permissions:
 
 jobs:
   build-and-release:
-    # 平台矩阵：macos-26 为 Apple Silicon（arm64），macos-15-intel 为 Intel（x86_64），
-    # ubuntu-24.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
+    # 平台矩阵：macos-26 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
+    # ubuntu-26.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
     # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
     strategy:
       fail-fast: false
@@ -41,9 +41,9 @@ jobs:
         include:
           - platform: macos-26
             arch: aarch64
-          - platform: macos-15-intel
+          - platform: macos-26-intel
             arch: x86_64
-          - platform: ubuntu-24.04
+          - platform: ubuntu-26.04
             arch: x86_64
           - platform: windows-latest
             arch: x86_64
@@ -55,8 +55,7 @@ jobs:
       # Linux 打包的系统依赖（Tauri v2 官方清单）：webkit2gtk-4.1 + GTK3 + tray + 图标渲染，
       # 以及 xdg-utils（linuxdeploy/AppImage 及部分打包脚本需要）。仅 ubuntu 需要
       # （Windows runner 预装 WebView2 与 MSVC 工具链，无需额外安装）。
-      # Ubuntu 24.04 的 tray 包名是 libayatana-appindicator3-dev（libappindicator3-dev
-      # 为 transitional 包），与官方文档的 libappindicator3-dev 二选一即可。
+      # tray 使用 Ubuntu 提供的 libayatana-appindicator3-dev。
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
         run: |
@@ -198,7 +197,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
           # Tauri 仅在详细日志中输出 DMG 脚本的 stdout 和 stderr。
-          TAURI_BUILD_VERBOSE: ${{ matrix.platform == 'macos-15-intel' && '1' || '0' }}
+          TAURI_BUILD_VERBOSE: ${{ runner.os == 'macOS' && matrix.arch == 'x86_64' && '1' || '0' }}
         run: ./scripts/build-release.sh two
 
       # 发布门禁：构建脚本即使某个 Tauri bundler 没有产物也可能返回成功（例如

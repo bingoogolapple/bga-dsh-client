@@ -225,7 +225,7 @@ git add src-tauri/resources/runtime/rt/package.json \
   - Windows（交叉打包 `RUNTIME_TARGET=win32`）：`node-<ver>-win-x64.zip`
   - Linux（交叉打包 `RUNTIME_TARGET=linux`，可选 `TARGET_ARCH=arm64`）：
     `node-<ver>-linux-{x64,arm64}.tar.gz`
-  - Linux 的官方路径是 ubuntu-24.04 runner 上不设 RUNTIME_TARGET 本机构建（deb 产物）
+  - Linux 的官方路径是 ubuntu-26.04 runner 上不设 RUNTIME_TARGET 本机构建（deb 产物）
 - **runtime 按平台生成，重用时校验平台**：`build-release.sh` 的 `runtime_fresh()` 除版本外
   还比对 `runtime-manifest.json` 的 `platform` 字段（node 二进制与 node-pty/sharp 等 prebuilds
   是平台相关的）；换平台构建（交叉或 Linux runner）会触发重建而非静默复用旧平台 runtime。
