@@ -23,7 +23,7 @@
 ### ⚙️ 服务管理
 
 - **启动 / 重启 / 停止**服务：可分别从主界面底部、设置页、托盘菜单操作；可验证归属的外部 DSH 同样支持管理，普通未知占端口程序保持保护。
-- **两种拉起方式，完全自动**（无需配置）：普通版（plain）使用 `npx --yes @deepseek-ai/dsh web --no-open` 拉起 dsh 服务（自动跟随 npm 最新版；已缓存的安装复用，重启秒启——严禁 `--prefer-online`，那会每次重新下载整个依赖树导致重启卡死）；内置版（bundled，仅 `-bundled` 产物）应用自带 Node.js 与 dsh，完全离线可用。应用按构建类型自动选择。
+- **两种拉起方式，完全自动**（无需配置）：普通版（plain）使用 `npx --yes @deepseek-ai/dsh@latest web --no-open` 拉起 dsh 服务（自动跟随 npm 最新版；已缓存的安装复用，重启秒启——严禁 `--prefer-online`，那会每次重新下载整个依赖树导致重启卡死）；内置版（bundled，仅 `-bundled` 产物）应用自带 Node.js 与 dsh，完全离线可用。应用按构建类型自动选择。
 - **自动探测 + 自动接管**：启动时探测 3080 端口——可识别的外部 DSH 直接接管并允许停止/重启；无法确认归属的普通占端口程序只复用、不操作。
 - 若在「dsh 版本管理」中指定了具体版本，则始终以该版本启动（优先级最高），默认的自动拉起逻辑不再生效，详见下文「📦 dsh 版本管理」。
 - 服务日志实时滚动展示，写入系统 app_config 目录的 `service.log`；超过 5MB 自动轮转（保留两份旧档）。npx 使用**独立缓存目录**（不读写用户 `~/.npm`，绕开权限/缓存损坏问题）。
@@ -99,7 +99,7 @@
    - **Windows**：`.exe` 安装程序（NSIS），双击运行即可。
    - **Linux**：`.deb` 包，使用 `dpkg -i` 安装。
 
-   > 💡 **想最省事？优先下载文件名带 `-bundled` 后缀的安装包**（如 `DeepSeekHarness-bundled-macos-aarch64.dmg`）。它会**内置 Node.js / npx / dsh 运行时，完全离线可用**，双击即用，不需要你在本机准备任何开发环境；普通版（文件名不带 `-bundled`）则需要系统已装好 Node.js / npx / dsh 才能拉起服务。
+   > 💡 **想最省事？优先下载文件名带 `-bundled` 后缀的安装包**（如 `DeepSeekHarness-bundled-macos-aarch64.dmg`）。它会**内置 Node.js / npx / dsh 运行时，完全离线可用**，双击即用，不需要你在本机准备任何开发环境；普通版（文件名不带 `-bundled`）需要在系统 PATH 上准备满足当前 dsh 要求的 Node.js 和 npx，首次启动时会联网下载 dsh。
 2. 启动 DeepSeekHarness，应用会自动探测本机是否已有 DSH 服务运行；如果没有则按设置页配置的方式自动拉起。
 
 > **macOS 打开报错处理**（本项目未做开发者签名与公证，被 Gatekeeper 拦截属正常现象）：

@@ -23,7 +23,7 @@ A desktop shell that wraps the [DeepSeek Harness](https://github.com/deepseek-ai
 ### ⚙️ Service Management
 
 - **Start / Restart / Stop** the service from the main window footer, the settings window, or the tray menu; verifiable external DSH services can be managed too, while unidentified processes are left untouched.
-- **Two launch modes, chosen automatically** (nothing to configure): the plain build launches dsh via `npx --yes @deepseek-ai/dsh web --no-open` (tracks the npm `latest` release; cached installs reuse so restart is fast — never `--prefer-online`, which would re-download the whole tree every start); the bundled build (only the `-bundled` artifact) ships its own Node.js and dsh and works fully offline. The app picks the mode from the build type.
+- **Two launch modes, chosen automatically** (nothing to configure): the plain build launches dsh via `npx --yes @deepseek-ai/dsh@latest web --no-open` (tracks the npm `latest` release; cached installs reuse so restart is fast — never `--prefer-online`, which would re-download the whole tree every start); the bundled build (only the `-bundled` artifact) ships its own Node.js and dsh and works fully offline. The app picks the mode from the build type.
 - **Auto-detect + auto take over**: on startup it probes port 3080 — a verifiable external DSH is taken over and can be stopped/restarted; unidentified processes occupying the port are reused without being managed.
 - If a specific version is pinned in "dsh Versions", the service always starts with that version (highest priority) and the automatic launch logic no longer applies — see "📦 dsh Version Manager" below.
 - Service logs stream live into `service.log` under the system app_config directory; files rotate automatically at 5 MB (two old archives kept). npx uses a **dedicated cache directory** (never touches the user's `~/.npm`, avoiding permission/corrupt-cache issues).
@@ -99,7 +99,7 @@ If you just want to use this desktop client, follow the steps below — **no Nod
    - **Windows**: `.exe` installer (NSIS) — double-click to run.
    - **Linux**: `.deb` package — install with `dpkg -i`.
 
-   > 💡 **Want the easiest path? Prefer installers with the `-bundled` suffix** (e.g. `DeepSeekHarness-bundled-macos-aarch64.dmg`). They **bundle Node.js / npx / dsh and work fully offline** — double-click and go, no dev environment needed on your machine; the plain build (no `-bundled` suffix) requires Node.js / npx / dsh installed on your system to launch the service.
+   > 💡 **Want the easiest path? Prefer installers with the `-bundled` suffix** (e.g. `DeepSeekHarness-bundled-macos-aarch64.dmg`). They **bundle Node.js / npx / dsh and work fully offline** — double-click and go, no dev environment needed on your machine; the plain build (no `-bundled` suffix) requires Node.js and npx on PATH. Use a Node.js version supported by dsh. The app downloads dsh on first launch.
 2. Launch DeepSeekHarness — the app automatically detects whether a DSH service is already running; if not, it launches one using the method configured in settings.
 
 > **macOS "can't open" troubleshooting** (this project is not developer-signed or notarized, so Gatekeeper blocking is expected):

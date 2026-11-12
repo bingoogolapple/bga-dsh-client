@@ -26,6 +26,9 @@ pub const DSH_PORT: u16 = 3080;
 /// npx 首次运行需要下载包，给足时间。
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 
+// 显式跟随 npm 的 latest 标签，即使它指向预发布版本。
+const NPX_DSH_COMMAND: &str = "npx --yes @deepseek-ai/dsh@latest web --no-open";
+
 /// 内置运行时在 Resources 中的目录名（与 scripts/bundle-runtime.mjs 的输出一致）。
 const RUNTIME_DIR: &str = "runtime";
 
@@ -42,7 +45,7 @@ impl LaunchMethod {
     /// 用于展示给用户的命令描述。
     fn display(self, locale: crate::i18n::Locale) -> String {
         match self {
-            Self::Npx => "npx --yes @deepseek-ai/dsh web".into(),
+            Self::Npx => NPX_DSH_COMMAND.into(),
             Self::Builtin => tr(locale, "mth.builtin", &[]),
         }
     }
@@ -1256,6 +1259,11 @@ pub(crate) fn is_legacy_without_launch_token(version: &str) -> bool {
 pub(crate) fn path_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut dirs: Vec<PathBuf> = Vec::new();
+    // 优先使用调用方选好的 Node.js。系统目录和版本管理器的目录仅用于补全 PATH，
+    // 以免桌面启动时缺少 node/npx，也避免覆盖命令行中已选定的 Node.js 版本。
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path).filter(|dir| !dir.as_os_str().is_empty()));
+    }
     // nvm：~/.nvm/versions/node/<v*>/bin（可能有多个版本，全部纳入）
     if let Ok(rd) = std::fs::read_dir(PathBuf::from(&home).join(".nvm/versions/node")) {
         for e in rd.flatten() {
@@ -1278,20 +1286,11 @@ pub(crate) fn path_dirs() -> Vec<PathBuf> {
     }
     dirs.push(PathBuf::from("/opt/homebrew/bin"));
     dirs.push(PathBuf::from("/usr/local/bin"));
-    // 系统工具（sh/sed/dirname/uname…）：显式兜底 + 继承父进程 PATH。
-    // 继承的 PATH 必须按 ':' 拆分成段再过滤，整体作为一个路径会被 is_dir 过滤掉，
-    // 导致 /usr/bin、/bin 丢失（npx 里 npm 会 spawn sh，pnpm 脚本要用 sed 等）。
+    // 系统工具（sh/sed/dirname/uname…）：显式兜底。
     dirs.push(PathBuf::from("/usr/bin"));
     dirs.push(PathBuf::from("/bin"));
     dirs.push(PathBuf::from("/usr/sbin"));
     dirs.push(PathBuf::from("/sbin"));
-    if let Ok(cur) = std::env::var("PATH") {
-        for seg in cur.split(':') {
-            if !seg.is_empty() {
-                dirs.push(PathBuf::from(seg));
-            }
-        }
-    }
     let mut seen = std::collections::HashSet::new();
     dirs.into_iter()
         .filter(|d| d.is_dir() && seen.insert(d.to_string_lossy().into_owned()))
@@ -1310,8 +1309,8 @@ pub(crate) fn shell_path_prefix() -> String {
 }
 
 /// 按自动判定的方式构造 shell 命令（返回命令与工作目录，后者恒为 None）。
-/// - `Npx`：`npx --yes @deepseek-ai/dsh web --no-open`
-///   （普通版，依赖系统 node/npx；不带版本号 → npx 解析 npm `latest` 标签，
+/// - `Npx`：`npx --yes @deepseek-ai/dsh@latest web --no-open`
+///   （普通版，依赖系统 node/npx，显式解析 npm `latest` 标签，
 ///   metadata 有缓存秒回；新版本发布后首次启动才会下载，之后复用 npm 缓存秒启。
 ///   绝不加 `--prefer-online`——那会强制每次重新下载整个依赖树，重启卡死）
 /// - `Builtin`：用内置 Node.js 直跑 dsh（内置版，离线可用）
@@ -1334,9 +1333,9 @@ fn build_command(
             Some(p) => format!("set \"npm_config_cache={}\" && ", p.display()),
             None => String::new(),
         };
-        let npx_dsh = "npx --yes @deepseek-ai/dsh web --no-open";
+        let npx_dsh = format!("{npm_prefix}{NPX_DSH_COMMAND}");
         match method {
-            LaunchMethod::Npx => (format!("{npm_prefix}{npx_dsh}"), None),
+            LaunchMethod::Npx => (npx_dsh, None),
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => (
                     format!(
@@ -1347,7 +1346,7 @@ fn build_command(
                     None,
                 ),
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => (format!("{npm_prefix}{npx_dsh}"), None),
+                None => (npx_dsh, None),
             },
         }
     }
@@ -1362,9 +1361,9 @@ fn build_command(
             ),
             None => String::new(),
         };
-        let npx_dsh = "exec npx --yes @deepseek-ai/dsh web --no-open";
+        let npx_dsh = format!("{path_prefix}{npm_prefix}exec {NPX_DSH_COMMAND}");
         match method {
-            LaunchMethod::Npx => (format!("{path_prefix}{npm_prefix}{npx_dsh}"), None),
+            LaunchMethod::Npx => (npx_dsh, None),
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => {
                     // 内置 PATH：捆绑 node bin + dsh-runtime/.bin 置前，dsh plugin 的 pnpm / npx 能找到
@@ -1397,7 +1396,7 @@ fn build_command(
                     )
                 }
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => (format!("{path_prefix}{npm_prefix}{npx_dsh}"), None),
+                None => (npx_dsh, None),
             },
         }
     }
@@ -1676,12 +1675,11 @@ fn kill_tree(child: &mut Child) {
 mod tests {
     use super::*;
 
-    /// 普通版（Npx）：命令包含 npx @deepseek-ai/dsh web --no-open（不自动弹浏览器），
-    /// 且注入独立 npm 缓存目录。
+    /// 普通版（Npx）：显式跟随 latest，不自动打开浏览器，并注入独立 npm 缓存目录。
     #[test]
     fn build_command_npx_injects_cache() {
         let (cmd, cwd) = build_command(LaunchMethod::Npx, None, Some(Path::new("/tmp/npm-cache")));
-        assert!(cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"));
+        assert!(cmd.contains("npx --yes @deepseek-ai/dsh@latest web --no-open"));
         // 严禁 --prefer-online：会强制每次重新下载整个依赖树，导致重启卡死
         assert!(!cmd.contains("prefer-online"), "cmd: {cmd}");
         assert!(cmd.contains("npm_config_cache"));
@@ -1731,7 +1729,7 @@ mod tests {
             Some(Path::new("/tmp/npm-cache")),
         );
         assert!(
-            cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"),
+            cmd.contains("npx --yes @deepseek-ai/dsh@latest web --no-open"),
             "cmd: {cmd}"
         );
     }
