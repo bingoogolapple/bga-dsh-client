@@ -32,15 +32,14 @@ permissions:
 
 jobs:
   build-and-release:
-    # 平台矩阵：macos-14 为 Apple Silicon（arm64），macos-15-intel 为 Intel（x86_64），
+    # 平台矩阵：macos-26 为 Apple Silicon（arm64），macos-15-intel 为 Intel（x86_64），
     # ubuntu-24.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
     # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
-    # macOS 13（旧 Intel runner）已公告下线，故 Intel 用 macos-15-intel。
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-14
+          - platform: macos-26
             arch: aarch64
           - platform: macos-15-intel
             arch: x86_64
