@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -27,6 +28,8 @@ pub struct DshVersionEntry {
 
 /// 远程版本缓存过期时间（1小时）。
 const REMOTE_CACHE_TTL_SECS: u64 = 3600;
+/// npm 下载并安装 dsh 的等待时间。
+pub(crate) const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(540);
 
 /// 默认 npm registry（用户未指定且设置里没有时使用）。
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
@@ -400,21 +403,27 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
         )
     };
     #[cfg(windows)]
-    let cmd = if let Some(rt) = crate::service::runtime_root(app) {
-        if let Some((node, _)) = crate::service::runtime_entry(&rt) {
-            let npm = rt.join("nd/node_modules/npm/bin/npm-cli.js");
-            format!(
-                "\"{}\" \"{}\" install --save-exact --registry \"{}\" @deepseek-ai/dsh@{}",
-                node.display(),
-                npm.display(),
-                registry,
-                version
-            )
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+
+        let bundled_npm = crate::service::runtime_root(app).and_then(|rt| {
+            let (node, _) = crate::service::runtime_entry(&rt)?;
+            Some((node, rt.join("nd/node_modules/npm/bin/npm-cli.js")))
+        });
+        if let Some((node, npm)) = bundled_npm {
+            let mut command = crate::hidden_command(node);
+            command
+                .arg(npm)
+                .args(["install", "--save-exact", "--registry", &registry])
+                .arg(format!("@deepseek-ai/dsh@{version}"));
+            command
         } else {
-            format!("npm install --save-exact --registry \"{registry}\" @deepseek-ai/dsh@{version}")
+            let mut command = crate::hidden_command("cmd");
+            command.args(["/D", "/S", "/C"]).raw_arg(format!(
+                "npm install --save-exact --registry \"{registry}\" @deepseek-ai/dsh@{version}"
+            ));
+            command
         }
-    } else {
-        format!("npm install --save-exact --registry \"{registry}\" @deepseek-ai/dsh@{version}")
     };
 
     // 带超时 + 管道防死锁的 subprocess 执行（与 version::run_capture 同模式）
@@ -425,20 +434,12 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
     use std::time::Instant;
 
     #[cfg(not(windows))]
-    let mut child = Command::new("sh")
-        .arg("-lc")
-        .arg(&cmd)
-        .current_dir(target)
-        .env("npm_config_cache", &cache_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("npm 进程启动失败: {}", e))?;
-    #[cfg(windows)]
-    let mut child = crate::hidden_command("cmd")
-        .arg("/C")
-        .arg(&cmd)
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.arg("-lc").arg(&cmd);
+        command
+    };
+    let mut child = command
         .current_dir(target)
         .env("npm_config_cache", &cache_dir)
         .stdin(Stdio::null())
@@ -465,16 +466,18 @@ fn do_download_dsh(app: &AppHandle, version: &str, target: &std::path::Path) -> 
         s
     });
 
-    let timeout = std::time::Duration::from_secs(540);
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) => {
-                if start.elapsed() > timeout {
+                if start.elapsed() > DOWNLOAD_TIMEOUT {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("npm install 超时（超过 {} 秒）", timeout.as_secs()));
+                    return Err(format!(
+                        "npm install 超时（超过 {} 秒）",
+                        DOWNLOAD_TIMEOUT.as_secs()
+                    ));
                 }
             }
             Err(e) => return Err(format!("npm 进程异常: {}", e)),
