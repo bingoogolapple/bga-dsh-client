@@ -149,8 +149,7 @@ public static class DshSmokeWindow
                 $graphics = [Drawing.Graphics]::FromImage($bitmap)
                 try {
                     # Capture the composed WebView2 surface. PrintWindow can omit it.
-                    $operation = [Drawing.CopyPixelOperation]::SourceCopy -bor [Drawing.CopyPixelOperation]::CaptureBlt
-                    $graphics.CopyFromScreen($origin.X, $origin.Y, 0, 0, $bitmap.Size, $operation)
+                    $graphics.CopyFromScreen($origin.X, $origin.Y, 0, 0, $bitmap.Size)
                 } finally {
                     $graphics.Dispose()
                 }
@@ -299,9 +298,9 @@ if ((Test-Path -LiteralPath $appConfig) -or (Test-Path -LiteralPath $settingsDir
 $systemNode = $null
 if ($Variant -eq 'plain') {
     $systemNode = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
-    $nodeVersion = (& $systemNode --version)
-    if ($LASTEXITCODE -ne 0 -or ($NodeVersion -and $nodeVersion.TrimStart('v') -ne $NodeVersion.TrimStart('v'))) {
-        throw "Expected working system Node $NodeVersion, got $nodeVersion"
+    $actualNodeVersion = (& $systemNode --version)
+    if ($LASTEXITCODE -ne 0 -or ($NodeVersion -and $actualNodeVersion.TrimStart('v') -ne $NodeVersion.TrimStart('v'))) {
+        throw "Expected working system Node $NodeVersion, got $actualNodeVersion"
     }
     $null = Get-Command npx.cmd -CommandType Application
 }
@@ -440,7 +439,7 @@ try {
         if ($npmDebug) {
             Write-Host 'Last npm debug messages from the app launch'
             Get-Content -LiteralPath $npmDebug.FullName -Tail 30 |
-                ForEach-Object { $_ -replace '(?i)(token[=:]\s*|authorization[=:]\s*)\S+', '$1[redacted]' } |
+                ForEach-Object { $_ -replace '(?i)(?:_auth(?:token)?|authorization|password|passwd|token)\s*[=:].*', '[redacted credential]' } |
                 Write-Host
         }
         foreach ($npxDir in Get-ChildItem -LiteralPath $npxCachePrefix -Directory -ErrorAction SilentlyContinue) {

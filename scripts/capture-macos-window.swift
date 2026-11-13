@@ -33,8 +33,10 @@ func containsDshInterface(_ url: URL) throws -> Bool {
     try VNImageRequestHandler(cgImage: image).perform([request])
     let labels = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
         .joined(separator: " ").lowercased().filter { $0.isLetter || $0.isNumber }
-    return ["newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith", "addworkspace", "添加工作区"]
-        .contains(where: labels.contains)
+    return [
+        "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith", "addworkspace", "添加工作区",
+        "addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置",
+    ].contains(where: labels.contains)
 }
 
 guard CommandLine.arguments.count == 3, let pid = Int(CommandLine.arguments[1]), pid > 0 else {
