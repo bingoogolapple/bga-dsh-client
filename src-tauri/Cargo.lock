@@ -275,6 +275,7 @@ version = "0.0.14"
 dependencies = [
  "arboard",
  "bytes",
+ "dunce",
  "getrandom 0.2.17",
  "http-body-util",
  "hyper",

@@ -44,6 +44,9 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 [target.'cfg(any(unix, windows))'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+dunce = "1.0.5"
+
 [profile.release]
 strip = true
 lto = true

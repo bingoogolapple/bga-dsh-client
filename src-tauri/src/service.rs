@@ -61,8 +61,17 @@ impl LaunchMethod {
 /// 内置 Node.js 运行时根目录：<Resources>/runtime。
 /// 非内置版打包没有该目录，返回 None（此时自动走 npx 拉起）。
 pub fn runtime_root(handle: &AppHandle) -> Option<PathBuf> {
-    let dir = handle.path().resource_dir().ok()?.join(RUNTIME_DIR);
+    let dir = bundled_runtime_dir(&handle.path().resource_dir().ok()?);
     dir.is_dir().then_some(dir)
+}
+
+fn bundled_runtime_dir(resource_dir: &Path) -> PathBuf {
+    let dir = resource_dir.join(RUNTIME_DIR);
+    // Tauri 在 Windows 上返回规范化路径，Node 的脚本加载器不兼容 \\?\ 前缀。
+    // 仅在兼容路径与原路径等价时去掉前缀。
+    #[cfg(windows)]
+    let dir = dunce::simplified(&dir).to_path_buf();
+    dir
 }
 
 /// 内置运行时的 Node 可执行文件与 dsh 入口。
@@ -1357,7 +1366,7 @@ impl StartCommand {
 
     #[cfg(windows)]
     fn node(node: &Path, bin_js: &Path) -> Self {
-        // Tauri 的资源目录可能带 Windows 的 \\?\ 前缀，cmd 无法用这种路径启动 exe。
+        // 直接执行 Node，应用安装路径和脚本路径由系统作为单独参数传递。
         let mut process = crate::hidden_command(node);
         process.arg(bin_js).args(["web", "--no-open"]);
         Self {
@@ -1726,11 +1735,9 @@ mod tests {
     fn build_command_builtin_uses_runtime_entry() {
         // 构造一个模拟的 runtime 布局：nd/bin/node（类 unix）或 nd/node.exe（win）
         // + rt/node_modules/@deepseek-ai/dsh/lib/bin.js
-        let fake =
-            std::env::temp_dir().join(format!("dsh-fake-runtime-test-{}", std::process::id()));
-        std::fs::create_dir_all(&fake).unwrap();
-        // Windows 的 canonicalize 与 Tauri 一样返回带 \\?\ 前缀的目录。
-        let fake = fake.canonicalize().unwrap();
+        let resource_dir =
+            std::env::temp_dir().join(format!("dsh fake runtime test {}", std::process::id()));
+        let fake = bundled_runtime_dir(&resource_dir);
         let node = if cfg!(windows) {
             fake.join("nd").join("node.exe")
         } else {
@@ -1758,7 +1765,6 @@ mod tests {
         assert!(!launch.uses_npx);
         #[cfg(windows)]
         {
-            assert!(node.to_str().unwrap().starts_with(r"\\?\"));
             assert_eq!(launch.process.get_program(), node.as_os_str());
             assert!(launch.process.get_args().eq([
                 bin_js.as_os_str(),
@@ -1766,7 +1772,20 @@ mod tests {
                 std::ffi::OsStr::new("--no-open"),
             ]));
         }
-        let _ = std::fs::remove_dir_all(&fake);
+        let _ = std::fs::remove_dir_all(&resource_dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_runtime_dir_simplifies_tauri_windows_path() {
+        assert_eq!(
+            bundled_runtime_dir(Path::new(r"\\?\C:\Program Files\DeepSeekHarness")),
+            Path::new(r"C:\Program Files\DeepSeekHarness\runtime"),
+        );
+        assert_eq!(
+            bundled_runtime_dir(Path::new(r"\\?\C:\CON\DeepSeekHarness")),
+            Path::new(r"\\?\C:\CON\DeepSeekHarness\runtime"),
+        );
     }
 
     /// 内置版 + runtime 缺失（异常/开发目录）：安全回退 npx，让日志暴露原因。
