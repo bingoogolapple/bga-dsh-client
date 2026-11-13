@@ -202,6 +202,16 @@ pnpm two              # 一次出两个版本：普通版（plain）+ 捆绑版�
 | **bundled** | `pnpm bundled` | 内置 Node.js + pnpm + dsh，离线可用 | 体积大，开箱即用，产物名带 `-bundled` 后缀 |
 | **two** | `pnpm two` | 同时产出 plain + bundled | 一次构建两个版本，方便同时分发 |
 
+### 安装包冷启动验证
+
+用 GitHub CLI 手动运行 **Installer cold start**，选择要验证的分支：
+
+```bash
+gh workflow run verify-dsh-startup.yml --ref develop
+```
+
+工作流会构建 Windows x64 普通版和内置版、Intel macOS 普通版，在干净的 runner 上安装并启动客户端。通过后可从运行摘要或 **Artifacts** 下载客户端截图。工作流合入默认分支后，也可以在 GitHub Actions 页面点 **Run workflow** 选择分支运行。
+
 ### 打包发布
 
 发布通过 GitHub Releases 进行，流程：

@@ -202,6 +202,16 @@ The three release build modes:
 | **bundled** | `pnpm bundled` | bundles Node.js + pnpm + dsh, offline-capable | large, works out of the box, name carries `-bundled` suffix |
 | **two** | `pnpm two` | produces plain + bundled at once | one build yields both versions for easy distribution |
 
+### Installer Cold-Start Checks
+
+Use the GitHub CLI to run **Installer cold start** for the branch you want to verify:
+
+```bash
+gh workflow run verify-dsh-startup.yml --ref develop
+```
+
+The workflow builds both Windows x64 editions and the Intel macOS plain edition, then installs and starts each on a clean runner. Download the client screenshots from the run summary or **Artifacts** after the checks pass. Once the workflow reaches the default branch, you can also select a branch using **Run workflow** in GitHub Actions.
+
 ### Releasing
 
 Releases go through GitHub Releases, flow:
