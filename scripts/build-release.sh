@@ -84,13 +84,14 @@ fi
 
 # Intel runner 上，Tauri 为布置 DMG 挂载的可写映像在卸载时曾超时。
 # 先在普通目录放好 .app 和 Applications 链接，再直接生成只读压缩映像。
-build_intel_bundled_dmg() (
-  local app="$1" out_dir="$2"
+build_intel_dmg() (
+  local app="$1" out_dir="$2" variant="$3"
   local app_name="${app##*/}"
   local product="${app_name%.app}"
-  local version staging dmg
+  local version staging dmg suffix=""
   version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
-  dmg="${product}_${version}_x64-bundled.dmg"
+  if [[ "$variant" == "bundled" ]]; then suffix="-bundled"; fi
+  dmg="${product}_${version}_x64${suffix}.dmg"
   staging="$(mktemp -d "$out_dir/.dmg.XXXXXXXX")"
   trap 'rm -rf "$staging"' EXIT
 
@@ -110,22 +111,22 @@ build_one() {
 
   echo "==> tauri build ($variant)…"
   local tauri_args=(build)
-  local intel_bundled=0
+  local intel_dmg=0
   if [[ "${TAURI_BUILD_VERBOSE:-0}" == 1 ]]; then
     tauri_args+=(--verbose)
   fi
   if [[ "$variant" == "bundled" ]]; then
     tauri_args+=("${BUNDLE_EXTRA[@]}")
-    if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "x86_64" ]]; then
-      intel_bundled=1
-      tauri_args+=(--bundles app)
-    fi
+  fi
+  if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "x86_64" ]]; then
+    intel_dmg=1
+    tauri_args+=(--bundles app)
   fi
   npm run tauri -- "${tauri_args[@]}"
 
   bundle_root="src-tauri/target/release/bundle"
-  if [[ "$intel_bundled" == 1 ]]; then
-    build_intel_bundled_dmg "$bundle_root/macos/DeepSeekHarness.app" "$out_dir"
+  if [[ "$intel_dmg" == 1 ]]; then
+    build_intel_dmg "$bundle_root/macos/DeepSeekHarness.app" "$out_dir" "$variant"
     echo "==> 产物: $out_dir"
     ls -la "$out_dir"
     return
