@@ -36,6 +36,7 @@ func containsDshInterface(_ url: URL) throws -> Bool {
     return [
         "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith", "addworkspace", "添加工作区",
         "addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置",
+        "previewnotice", "预览须知", "预览说明", "预览提示", "预览公告",
     ].contains(where: labels.contains)
 }
 
@@ -44,7 +45,7 @@ guard CommandLine.arguments.count == 3, let pid = Int(CommandLine.arguments[1]),
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[2])
 let candidate = output.deletingLastPathComponent()
-    .appendingPathComponent(".dsh-capture-\(UUID().uuidString).png")
+    .appendingPathComponent("dsh-capture-\(UUID().uuidString).png")
 let files = FileManager.default
 var lastError = "No visible client window"
 
@@ -54,14 +55,16 @@ for _ in 0..<20 {
         do {
             let capture = Process()
             capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            capture.arguments = ["-x", "-o", "-a", "-l\(id)", candidate.path]
+            capture.arguments = ["-x", "-o", "-a", "-T0", "-l\(id)", candidate.path]
             try capture.run()
             capture.waitUntilExit()
             if capture.terminationStatus == 0, try containsDshInterface(candidate) {
                 try files.moveItem(at: candidate, to: output)
                 exit(EXIT_SUCCESS)
             }
-            lastError = "Window capture did not show the dsh interface (exit \(capture.terminationStatus))"
+            lastError = files.fileExists(atPath: candidate.path)
+                ? "Window capture did not show the dsh interface"
+                : "screencapture produced no PNG (exit \(capture.terminationStatus))"
         } catch {
             lastError = error.localizedDescription
         }
