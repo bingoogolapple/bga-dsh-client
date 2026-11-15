@@ -16,15 +16,21 @@ for file in "${files[@]}"; do
 done
 
 release=$(gh api --paginate --slurp "repos/$repository/releases?per_page=100" |
-  jq -c --arg tag "$tag" '[.[][] | select(.tag_name == $tag)] | first // empty')
+  jq -c --arg tag "$tag" '
+    [.[][] | select(.tag_name == $tag)] as $matches
+    | ($matches | map(select(.draft == false))) as $published
+    | if ($published | length) == 1 then $published[0]
+      elif ($matches | length) > 1 then error("Multiple releases match the tag")
+      else $matches[0] // empty
+      end
+  ')
 if [[ -z "$release" ]]; then
-  options=()
+  create=("$tag" --verify-tag --draft --generate-notes --notes-file .github/release-notes.md)
   version_without_build=${tag%%+*}
   if [[ "$version_without_build" == *-* ]]; then
-    options+=(--prerelease)
+    create+=(--prerelease)
   fi
-  gh release create "$tag" --verify-tag --draft --generate-notes \
-    --notes-file .github/release-notes.md "${options[@]}"
+  gh release create "${create[@]}"
   release_id=$(gh release view "$tag" --json databaseId --jq '.databaseId')
   draft=true
 else
@@ -53,6 +59,8 @@ if [[ "$draft" == true ]]; then
     while IFS= read -r name; do
       upload+=("$directory/$name")
     done <<< "$changed"
+    target=$(gh release view "$tag" --json databaseId,isDraft)
+    jq -e --argjson id "$release_id" '.isDraft and .databaseId == $id' <<< "$target" > /dev/null
     gh release upload "$tag" --clobber "${upload[@]}"
     assets=$(release_assets)
   fi
@@ -63,7 +71,7 @@ jq -en --slurpfile expected "$asset_manifest" --argjson actual "$assets" '
 ' > /dev/null || { echo "Release assets do not match the verified files." >&2; exit 1; }
 
 if [[ "$draft" == true ]]; then
-  gh release edit "$tag" --draft=false
+  gh api --method PATCH "repos/$repository/releases/$release_id" -F draft=false --jq '.html_url'
 else
   echo "Release $tag already contains the verified files."
 fi
