@@ -241,7 +241,9 @@ Releases go through GitHub Releases, flow:
    git push origin v0.0.2
    ```
 
-5. After pushing, `.github/workflows/release.yml` automatically builds on a macOS runner and uploads the resulting `.dmg`, `.app`, etc. to the Release of that tag.
+5. After pushing, **Release** builds both editions on all four platforms and uploads the installers and macOS ZIPs as Actions artifacts. It checks the file list and cold-starts the same installers before uploading all assets and publishing the Release.
+
+Before tagging, run the same build and verification with `gh workflow run release.yml --ref develop`. Download packages from **Artifacts** on the manual run.
 
 Users always download the latest version from the [Releases](../../releases/latest) page.
 

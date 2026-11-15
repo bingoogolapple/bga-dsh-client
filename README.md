@@ -241,8 +241,9 @@ gh workflow run verify-dsh-startup.yml --ref develop
    git push origin v0.0.2
    ```
 
-5. 推送后 `.github/workflows/release.yml` 会在 macOS runner 上自动执行构建，
-   并把生成的 `.dmg`、`.app` 等产物上传到该 tag 对应的 Release。
+5. 推送后，**Release** 会构建四个平台的普通版和内置版，上传安装包和 macOS ZIP 为 Actions 产物，再用同一批文件校验完整性和冷启动。全部通过后，统一上传附件并公开 Release。
+
+发版前可用 `gh workflow run release.yml --ref develop` 运行同样的构建和验证。手动运行的安装包可在该次运行的 **Artifacts** 下载。
 
 使用者始终从 [Releases](../../releases/latest) 页面下载最新版本。
 

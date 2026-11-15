@@ -2,19 +2,33 @@
 # Validate a native CI installer and exercise the app's default DSH startup path.
 set -euo pipefail
 
-if [[ $# != 3 || "$1" != /* || ! -f "$1" || "$3" != /* || "$3" != *.png ]]; then
-  echo "Usage: $0 <absolute plain Intel DMG> <app version> <absolute screenshot PNG>" >&2
+if [[ $# -lt 3 || $# -gt 5 ]]; then
+  echo "Usage: $0 <absolute DMG> <app version> <absolute screenshot PNG or ''> [plain|bundled] [absolute app ZIP]" >&2
   exit 2
 fi
 
 dmg=$1
 expected_version=$2
 screenshot=$3
-if [[ "$(uname -s)" != Darwin || "$(uname -m)" != x86_64 || "$(id -u)" == 0 ]]; then
-  echo "Smoke test requires a non-root native Intel macOS runner" >&2
+variant=${4:-plain}
+archive=${5:-}
+if [[ "$dmg" != /* || ! -f "$dmg" || -z "$expected_version" ||
+      ( -n "$screenshot" && ( "$screenshot" != /* || "$screenshot" != *.png ) ) ||
+      ( -n "$archive" && ( "$archive" != /* || ! -f "$archive" ) ) ]]; then
+  echo "Supply an absolute DMG, the app version, and valid screenshot or ZIP paths if used" >&2
+  exit 2
+fi
+if [[ "$variant" != plain && "$variant" != bundled ]]; then
+  echo "Unknown package variant: $variant" >&2
+  exit 2
+fi
+arch=$(uname -m)
+if [[ "$(uname -s)" != Darwin || ( "$arch" != x86_64 && "$arch" != arm64 ) || "$(id -u)" == 0 ]]; then
+  echo "Smoke test requires a non-root native macOS runner" >&2
   exit 2
 fi
 sw_vers
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 app_config="$HOME/Library/Application Support/cn.bingoogolapple.dsh"
 if [[ -e "$app_config" || -e "$HOME/.dsh/bga-dsh-client" ]]; then
@@ -54,13 +68,57 @@ hdiutil detach "$mount_dir" || hdiutil detach -force "$mount_dir"
 mounted=0
 codesign --verify --strict "$app"
 
-# Compile before launch so screenshot tooling adds no time to the cold start.
-script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
-swiftc "$script_dir/capture-macos-window.swift" -o "$scratch/capture-window"
-mkdir -p -- "$(dirname -- "$screenshot")"
-rm -f -- "$screenshot"
+# The ZIP is an alternative installer. Compare its app with the app that will
+# be cold-started from the DMG, including executable modes and symlink targets.
+if [[ -n "$archive" ]]; then
+  mkdir "$scratch/zip"
+  ditto -x -k "$archive" "$scratch/zip"
+  codesign --verify --strict "$scratch/zip/DeepSeekHarness.app"
+  python3 - "$app" "$scratch/zip/DeepSeekHarness.app" <<'PY'
+import filecmp
+import os
+from pathlib import Path
+import stat
+import sys
 
-python3 - "$app" "$app_config" "$expected_version" "$screenshot" <<'PY'
+
+def compare(left, right, relative):
+    left_mode, right_mode = left.lstat().st_mode, right.lstat().st_mode
+    if left_mode != right_mode:
+        raise SystemExit(f"DMG and ZIP file modes differ at {relative}")
+    if stat.S_ISDIR(left_mode):
+        entries = {entry.name for entry in left.iterdir()}
+        if entries != {entry.name for entry in right.iterdir()}:
+            raise SystemExit(f"DMG and ZIP have different directory contents at {relative}")
+        for name in sorted(entries):
+            compare(left / name, right / name, relative / name)
+    elif stat.S_ISLNK(left_mode):
+        if os.readlink(left) != os.readlink(right):
+            raise SystemExit(f"DMG and ZIP symlink targets differ at {relative}")
+    elif not stat.S_ISREG(left_mode) or not filecmp.cmp(left, right, shallow=False):
+        raise SystemExit(f"DMG and ZIP files differ at {relative}")
+
+
+compare(Path(sys.argv[1]), Path(sys.argv[2]), Path("DeepSeekHarness.app"))
+print("ZIP and DMG app contents, permissions and symbolic links match", flush=True)
+PY
+  rm -rf -- "$scratch/zip"
+fi
+
+if [[ -n "$screenshot" ]]; then
+  # Compile before launch so screenshot tooling adds no time to the cold start.
+  swiftc "$script_dir/capture-macos-window.swift" -o "$scratch/capture-window"
+  mkdir -p -- "$(dirname -- "$screenshot")"
+  rm -f -- "$screenshot"
+fi
+
+if [[ "$variant" == bundled ]]; then
+  NODE_VERSION=${NODE_VERSION:-$(sed -nE "s/^const NODE_VER = '([^']+)'$/\1/p" "$script_dir/bundle-runtime.mjs")}
+  BUNDLED_DSH_VERSION=${BUNDLED_DSH_VERSION:-$(sed -nE "s/^const DSH_VERSION = '([^']+)'$/\1/p" "$script_dir/bundle-runtime.mjs")}
+  export NODE_VERSION BUNDLED_DSH_VERSION
+fi
+
+python3 - "$app" "$app_config" "$expected_version" "$arch" "$variant" "$screenshot" <<'PY'
 import http.cookiejar
 import json
 import os
@@ -80,7 +138,7 @@ import urllib.request
 app = Path(sys.argv[1]).resolve()
 app_config = Path(sys.argv[2])
 expected_version = sys.argv[3]
-screenshot = Path(sys.argv[4])
+arch, variant, screenshot = sys.argv[4:7]
 scratch = app.parent
 base_url = "http://127.0.0.1:3080/"
 app_log = scratch / "app.log"
@@ -93,16 +151,37 @@ with (app / "Contents/Info.plist").open("rb") as stream:
 if info["CFBundleShortVersionString"] != expected_version:
     raise SystemExit("The installer contains the wrong App version")
 exe = app / "Contents/MacOS" / info["CFBundleExecutable"]
-subprocess.run(["lipo", str(exe), "-verify_arch", "x86_64"], check=True)
+subprocess.run(["lipo", str(exe), "-verify_arch", arch], check=True)
 
-if (app / "Contents/Resources/runtime").exists():
-    raise SystemExit("Plain installer unexpectedly contains the bundled runtime")
-node_version = subprocess.check_output(["node", "--version"], text=True).strip()
+runtime = app / "Contents/Resources/runtime"
 expected_node = os.environ.get("NODE_VERSION", "").removeprefix("v")
-if expected_node and node_version != f"v{expected_node}":
-    raise SystemExit(f"Unexpected system Node version: {node_version}")
-print(f"System Node: {node_version}", flush=True)
-subprocess.run(["npx", "--version"], check=True)
+if variant == "bundled":
+    node = runtime / "nd/bin/node"
+    entry = runtime / "rt/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    manifest = json.loads((runtime / "runtime-manifest.json").read_text())
+    expected_dsh = os.environ["BUNDLED_DSH_VERSION"]
+    expected_runtime = {"nodeVersion": f"v{expected_node}", "dshVersion": expected_dsh,
+                        "platform": "darwin", "arch": "arm64" if arch == "arm64" else "x64"}
+    if any(manifest.get(key) != value for key, value in expected_runtime.items()):
+        raise SystemExit("The bundled runtime manifest does not match the target or requested versions")
+    subprocess.run(["lipo", str(node), "-verify_arch", arch], check=True)
+    node_version = subprocess.check_output([node, "--version"], text=True).strip()
+    dsh_version = json.loads((entry.parents[1] / "package.json").read_text())["version"]
+    if not entry.is_file():
+        raise SystemExit("The bundled dsh entry point is missing")
+    if not expected_node or not expected_dsh or node_version != f"v{expected_node}" or dsh_version != expected_dsh:
+        raise SystemExit(f"Unexpected bundled Node or dsh version: {node_version}, {dsh_version}")
+    print(f"Bundled Node: {node_version}; bundled dsh: {dsh_version}", flush=True)
+    expected_command = f'exec "{node}" "{entry}" web --no-open'
+else:
+    if runtime.exists():
+        raise SystemExit("Plain installer unexpectedly contains the bundled runtime")
+    node_version = subprocess.check_output(["node", "--version"], text=True).strip()
+    if expected_node and node_version != f"v{expected_node}":
+        raise SystemExit(f"Unexpected system Node version: {node_version}")
+    print(f"System Node: {node_version}", flush=True)
+    subprocess.run(["npx", "--version"], check=True)
+    expected_command = "exec npx --yes @deepseek-ai/dsh@latest web --no-open"
 
 # Ensure port 3080 cannot refer to a reused external service.
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as port:
@@ -159,14 +238,14 @@ env.update(
     npm_config_cache=str(scratch / "empty-external-npm-cache"),
 )
 
-print("Launching the installed Intel app with no configuration or npm cache", flush=True)
+print(f"Launching the installed {arch} {variant} app with no configuration or npm cache", flush=True)
 started = time.monotonic()
 with app_log.open("wb") as output:
     proc = subprocess.Popen([exe], cwd=scratch, env=env, stdout=output, stderr=subprocess.STDOUT,
                             start_new_session=True)
     groups = set()
     try:
-        deadline = time.monotonic() + 780
+        deadline = time.monotonic() + (780 if variant == "plain" else 240)
         while time.monotonic() < deadline:
             if proc.poll() is not None:
                 raise RuntimeError(f"App exited before DSH startup ({proc.returncode})")
@@ -187,8 +266,13 @@ with app_log.open("wb") as output:
             time.sleep(0.5)
         else:
             raise RuntimeError("Timed out waiting for the app's own DSH process and launch token")
-        if "npx --yes @deepseek-ai/dsh@latest web --no-open" not in service_log.read_text(errors="replace"):
-            raise RuntimeError("App did not use the default npx latest command")
+        if expected_command not in service_log.read_text(errors="replace"):
+            raise RuntimeError(f"App did not use the expected {variant} startup command")
+        listeners = subprocess.check_output(
+            ["lsof", "-nP", "-iTCP:3080", "-sTCP:LISTEN", "-t"], text=True
+        ).splitlines()
+        if not any(os.getpgid(int(pid)) == service_pid for pid in listeners):
+            raise RuntimeError("The dsh listener does not belong to the app's service process group")
 
         cookies = http.cookiejar.CookieJar()
         client = urllib.request.build_opener(
@@ -213,15 +297,20 @@ with app_log.open("wb") as output:
 
         if proc.poll() is not None:
             raise RuntimeError("App exited while checking the DSH service")
-        packages = list((app_config / "npm-cache/_npx").glob("*/node_modules/@deepseek-ai/dsh/package.json"))
-        if len(packages) != 1:
-            raise RuntimeError("Expected one dsh package in the newly populated app npm cache")
-        dsh_version = json.loads(packages[0].read_text())["version"]
+        npx_cache = app_config / "npm-cache/_npx"
+        if variant == "plain":
+            packages = list(npx_cache.glob("*/node_modules/@deepseek-ai/dsh/package.json"))
+            if len(packages) != 1:
+                raise RuntimeError("Expected one dsh package in the newly populated app npm cache")
+            dsh_version = json.loads(packages[0].read_text())["version"]
+        elif npx_cache.exists():
+            raise RuntimeError("Bundled installer unexpectedly populated the app npx cache")
         seconds = time.monotonic() - started
-        print(f"App {expected_version} (Intel macOS, plain) started dsh {dsh_version} after {seconds:.1f} seconds. "
+        print(f"App {expected_version} (macOS {arch}, {variant}) started dsh {dsh_version} after {seconds:.1f} seconds. "
               "Unauthenticated HTTP 401 and authenticated HTTP 200 confirmed.", flush=True)
-        subprocess.run([scratch / "capture-window", str(proc.pid), str(screenshot)], check=True, timeout=120)
-        print("PASS: Captured the running Intel macOS client with its dsh interface.", flush=True)
+        if screenshot:
+            subprocess.run([scratch / "capture-window", str(proc.pid), screenshot], check=True, timeout=120)
+            print("PASS: Captured the running macOS client with its dsh interface.", flush=True)
     except Exception:
         show_failure_logs()
         raise

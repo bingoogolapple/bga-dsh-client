@@ -13,7 +13,6 @@ param(
 
     [string]$NodeVersion,
 
-    [Parameter(Mandatory)]
     [string]$ScreenshotPath
 )
 
@@ -281,7 +280,9 @@ function Test-SmokeService($Process) {
 }
 
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
-$ScreenshotPath = [IO.Path]::GetFullPath($ScreenshotPath, (Get-Location).ProviderPath)
+if ($ScreenshotPath) {
+    $ScreenshotPath = [IO.Path]::GetFullPath($ScreenshotPath, (Get-Location).ProviderPath)
+}
 if ($Variant -eq 'bundled' -and !$BundledDshVersion) { throw 'BundledDshVersion is required for the bundled installer' }
 $probeDir = Join-Path ([IO.Path]::GetTempPath()) "dsh-smoke-$([Guid]::NewGuid().ToString('N'))"
 $installDir = Join-Path $env:LOCALAPPDATA 'DeepSeekHarness'
@@ -429,7 +430,9 @@ try {
         if (!$dshVersion) { throw 'dsh package version was not recorded' }
     }
     $seconds = [Math]::Round($startup.Elapsed.TotalSeconds, 1)
-    Save-ClientScreenshot -App $app -Path $ScreenshotPath
+    if ($ScreenshotPath) {
+        Save-ClientScreenshot -App $app -Path $ScreenshotPath
+    }
     Write-Host "PASS: $AppVersion $Variant desktop window opened, dsh $dshVersion returned authenticated HTTP 200 after $seconds seconds"
 } catch {
     if ($Variant -eq 'plain') {

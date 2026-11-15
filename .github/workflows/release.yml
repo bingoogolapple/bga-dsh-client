@@ -1,37 +1,77 @@
 name: Release
 
-# 推送形如 v1.0.0 的 tag 时触发：按平台矩阵（macOS Apple Silicon / macOS Intel /
-# Linux / Windows）执行 ./scripts/build-release.sh two 构建 plain 与 bundled 双版本，
-# 产出 macOS 的 .app/.dmg、Linux 的 .deb、Windows 的 NSIS .exe，
-# 然后自动创建对应的 GitHub Release 并上传全部产物作为下载附件。
-#
-# 注意：产物文件名里的版本号来自 src-tauri/tauri.conf.json（与 Cargo.toml 同步），
-# 打 tag 前请先把两处的 version 与 tag 保持一致（如 v0.0.2 ↔ 0.0.2）。
 on:
   push:
     tags:
       - 'v*'
-  # 手动触发入口（Actions 页 → Run workflow）：构建失败后不删 tag、直接重跑构建验证。
-  # 手动触发时 GITHUB_REF 是分支而非 v* tag，因此「校验 tag 与版本号一致」、zip 打包、
-  # 创建 Release 步骤均限定只在 tag 触发时执行——手动触发仅跑构建与检查、不发布。
-  # 真正发布仍走推送 v* tag 的流程（失败重试优先用 Actions 页的 Re-run 按钮）。
   workflow_dispatch:
 
-# 同一 ref（tag 或手动触发的分支）不并发，避免 Release 冲突或重复构建；
-# 不取消已在进行中的构建（排队等待）。
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# 允许工作流创建 Release、上传附件；
-# rustsec/audit-check 还需要 checks: write 才能创建 check run
-# （缺省 read-only token 会报 "Resource not accessible by integration"）。
 permissions:
-  contents: write
-  checks: write
+  contents: read
 
 jobs:
-  build-and-release:
+  prepare:
+    name: 校验发布版本
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      app_version: ${{ steps.versions.outputs.app_version }}
+      node_ver: ${{ steps.versions.outputs.node_ver }}
+      dsh_version: ${{ steps.versions.outputs.dsh_version }}
+      pnpm_version: ${{ steps.versions.outputs.pnpm_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: 读取 App 和运行时版本
+        id: versions
+        shell: python
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          conf = json.loads(Path("src-tauri/tauri.conf.json").read_text())
+          package = json.loads(Path("package.json").read_text())
+          cargo = tomllib.loads(Path("src-tauri/Cargo.toml").read_text())
+          version = conf["version"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", version):
+              raise SystemExit(f"Invalid application version: {version}")
+          if version != package["version"] or version != cargo["package"]["version"]:
+              raise SystemExit("App versions differ in tauri.conf.json, package.json and Cargo.toml")
+          tag = os.environ["RELEASE_TAG"]
+          if tag and tag != f"v{version}":
+              raise SystemExit(f"Tag {tag} does not match v{version}")
+          runtime = Path("scripts/bundle-runtime.mjs").read_text()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"app_version={version}", file=output)
+              for key in ("NODE_VER", "DSH_VERSION", "PNPM_VERSION"):
+                  match = re.search(rf"^const {key} = '([^'\r\n]+)'$", runtime, re.M)
+                  if not match:
+                      raise SystemExit(f"Missing {key} in bundle-runtime.mjs")
+                  print(f"{key.lower()}={match[1]}", file=output)
+          print(f"Application version: {version}")
+
+  build:
+    name: 构建 / ${{ matrix.platform }}
+    needs: prepare
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      checks: write
+    outputs:
+      macos_arm: ${{ steps.artifact.outputs.macos_arm }}
+      macos_intel: ${{ steps.artifact.outputs.macos_intel }}
+      linux: ${{ steps.artifact.outputs.linux }}
+      windows: ${{ steps.artifact.outputs.windows }}
     # 平台矩阵：macos-26 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
     # ubuntu-26.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
     # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
@@ -40,17 +80,23 @@ jobs:
       matrix:
         include:
           - platform: macos-26
+            key: macos_arm
             arch: aarch64
           - platform: macos-26-intel
+            key: macos_intel
             arch: x86_64
           - platform: ubuntu-26.04
+            key: linux
             arch: x86_64
           - platform: windows-latest
+            key: windows
             arch: x86_64
     runs-on: ${{ matrix.platform }}
     steps:
       - name: 检出源码
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # Linux 打包的系统依赖（Tauri v2 官方清单）：webkit2gtk-4.1 + GTK3 + tray + 图标渲染，
       # 以及 xdg-utils（linuxdeploy/AppImage 及部分打包脚本需要）。仅 ubuntu 需要
@@ -59,23 +105,9 @@ jobs:
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev xdg-utils
-
-      # 内置运行时版本：唯一定义在 scripts/bundle-runtime.mjs 的常量行
-      # （NODE_VER / DSH_VERSION / PNPM_VERSION，env 无覆盖项）。
-      # CI 不硬编码版本，从这里读取（本地 build-release.sh 的 default_ver 同理）；
-      # 升版本请用 ./scripts/set-runtime-version.sh（只改 bundle-runtime.mjs + docs/RUNTIME-VERSIONING.md）。
-      # shell: bash —— Windows runner 默认 pwsh，而本步骤用 bash 语法（$()、$GITHUB_OUTPUT）。
-      - name: 读取内置运行时版本
-        id: ver
-        shell: bash
-        run: |
-          echo "NODE_VER=$(sed -nE "s/.*const NODE_VER = '([^']+)'.*/\1/p" scripts/bundle-runtime.mjs | head -1)" >> "$GITHUB_OUTPUT"
-          echo "DSH_VERSION=$(sed -nE "s/.*const DSH_VERSION = '([^']+)'.*/\1/p" scripts/bundle-runtime.mjs | head -1)" >> "$GITHUB_OUTPUT"
-          echo "PNPM_VERSION=$(sed -nE "s/.*const PNPM_VERSION = '([^']+)'.*/\1/p" scripts/bundle-runtime.mjs | head -1)" >> "$GITHUB_OUTPUT"
-          echo "读取到: node=$NODE_VER dsh=$DSH_VERSION pnpm=$PNPM_VERSION"
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
@@ -123,21 +155,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: src-tauri/resources/runtime
-          key: dsh-runtime-${{ matrix.platform }}-${{ matrix.arch }}-${{ steps.ver.outputs.NODE_VER }}-${{ steps.ver.outputs.DSH_VERSION }}-${{ steps.ver.outputs.PNPM_VERSION }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
-
-      # shell: bash —— Windows runner 默认 pwsh，本步骤用 bash 语法（${var#v}、$(...)）
-      # 仅在 tag 触发时校验（手动触发时 ref 是分支名，无 tag 可比对）
-      - name: 校验 tag 与版本号一致
-        if: github.ref_type == 'tag'
-        shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          CONF_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' src-tauri/tauri.conf.json | head -1)"
-          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
-            echo "错误: tag $GITHUB_REF_NAME 与 tauri.conf.json 版本 $CONF_VERSION 不一致（发版前请运行 ./scripts/set-app-version.sh）" >&2
-            exit 1
-          fi
-          echo "版本一致: $TAG_VERSION"
+          key: dsh-runtime-${{ matrix.platform }}-${{ matrix.arch }}-${{ needs.prepare.outputs.node_ver }}-${{ needs.prepare.outputs.dsh_version }}-${{ needs.prepare.outputs.pnpm_version }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
 
       - name: 运行 Rust 单元测试
         working-directory: src-tauri
@@ -167,7 +185,7 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --locked -- -D warnings
 
       # 前端质量门禁：ESLint（含 XSS 相关规则）+ Prettier 格式校验。
       # 原先只有 `node --check`（仅语法校验，查不出未定义变量、死代码、
@@ -195,107 +213,171 @@ jobs:
       - name: 构建双版本（plain + bundled）
         shell: bash
         env:
-          SENTRY_DSN: ${{ github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
+          SENTRY_DSN: ${{ github.event_name == 'push' && github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
           # Tauri 仅在详细日志中输出 DMG 脚本的 stdout 和 stderr。
           TAURI_BUILD_VERBOSE: ${{ runner.os == 'macOS' && matrix.arch == 'x86_64' && '1' || '0' }}
         run: ./scripts/build-release.sh two
 
-      # 发布门禁：构建脚本即使某个 Tauri bundler 没有产物也可能返回成功（例如
-      # 配置/平台目标变化导致目录为空）。在上传 Release 前显式检查两套产物，
-      # 避免把不完整的版本发布出去。
-      - name: 校验发布产物完整性
+      - name: 整理安装包和 macOS ZIP
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.key }}
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/release-artifacts.py stage "$PLATFORM" "$APP_VERSION" release-files
+          else
+            python3 scripts/release-artifacts.py stage "$PLATFORM" "$APP_VERSION" release-files
+          fi
+
+      - name: 上传安装包
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}-${{ github.run_attempt }}
+          path: release-files
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+      - name: 记录不可变的产物 ID
+        id: artifact
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.key }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          printf '%s=%s\n' "$PLATFORM" "$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+
+  integrity:
+    name: 校验四平台产物完整性
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact_ids: ${{ steps.ids.outputs.all }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: 检查产物 ID
+        id: ids
+        shell: bash
+        env:
+          MAC_ARM: ${{ needs.build.outputs.macos_arm }}
+          MAC_INTEL: ${{ needs.build.outputs.macos_intel }}
+          LINUX: ${{ needs.build.outputs.linux }}
+          WINDOWS: ${{ needs.build.outputs.windows }}
+        run: |
+          ids="$MAC_ARM,$MAC_INTEL,$LINUX,$WINDOWS"
+          [[ "$ids" =~ ^[0-9]+,[0-9]+,[0-9]+,[0-9]+$ ]]
+          printf 'all=%s\n' "$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.ids.outputs.all }}
+          path: release-files
+          merge-multiple: true
+          digest-mismatch: error
+      - name: 检查 12 个预期附件
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+        run: python3 scripts/release-artifacts.py verify "$APP_VERSION" release-files
+
+  smoke:
+    name: 冷启动 / ${{ matrix.runner }} / ${{ matrix.variant }}
+    needs: [prepare, build, integrity]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos_arm, macos_intel, linux, windows]
+        variant: [plain, bundled]
+        include:
+          - platform: macos_arm
+            runner: macos-26
+            arch: aarch64
+            dmg_arch: aarch64
+          - platform: macos_intel
+            runner: macos-26-intel
+            arch: x86_64
+            dmg_arch: x64
+          - platform: linux
+            runner: ubuntu-24.04
+          - platform: windows
+            runner: windows-latest
+    env:
+      APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+      NODE_VERSION: ${{ needs.prepare.outputs.node_ver }}
+      BUNDLED_DSH_VERSION: ${{ needs.prepare.outputs.dsh_version }}
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs[matrix.platform] }}
+          path: release-files
+          digest-mismatch: error
+      - uses: actions/setup-node@v7
+        if: matrix.variant == 'plain'
+        with:
+          node-version: ${{ needs.prepare.outputs.node_ver }}
+          package-manager-cache: false
+      - name: Windows 安装和冷启动
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $suffix = if ($env:VARIANT -eq 'bundled') { '-bundled' } else { '' }
+          $installer = Join-Path $PWD "release-files/DeepSeekHarness_${env:APP_VERSION}_x64-setup${suffix}.exe"
+          & ./scripts/smoke-windows-installer.ps1 -Installer $installer -Variant $env:VARIANT `
+            -AppVersion $env:APP_VERSION -NodeVersion $env:NODE_VERSION -BundledDshVersion $env:BUNDLED_DSH_VERSION
+      - name: macOS 安装、ZIP 校验和冷启动
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+          DMG_ARCH: ${{ matrix.dmg_arch }}
+        run: |
+          suffix=""
+          if [[ "$VARIANT" == bundled ]]; then suffix="-bundled"; fi
+          dmg="$PWD/release-files/DeepSeekHarness_${APP_VERSION}_${DMG_ARCH}${suffix}.dmg"
+          zip="$PWD/release-files/DeepSeek-Harness${suffix}-${ARCH}-v${APP_VERSION}.zip"
+          bash scripts/smoke-macos-installer.sh "$dmg" "$APP_VERSION" "" "$VARIANT" "$zip"
+      - name: Ubuntu 24.04 安装和冷启动
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          shopt -s nullglob
-          for variant in plain bundled; do
-            files=(dist/release/$variant/*)
-            if [ "${#files[@]}" -eq 0 ]; then
-              echo "错误: dist/release/$variant 没有生成任何产物" >&2
-              exit 1
-            fi
-          done
-          case "${{ runner.os }}" in
-            macOS)
-              for variant in plain bundled; do
-                comp=(dist/release/$variant/*.dmg)
-                [ "${#comp[@]}" -gt 0 ] || { echo "错误: $variant 缺少 dmg" >&2; exit 1; }
-              done ;;
-            Linux)
-              for variant in plain bundled; do
-                comp=(dist/release/$variant/*.deb)
-                [ "${#comp[@]}" -gt 0 ] || { echo "错误: $variant 缺少 deb" >&2; exit 1; }
-              done ;;
-            Windows)
-              for variant in plain bundled; do
-                comp=(dist/release/$variant/*.exe)
-                [ "${#comp[@]}" -gt 0 ] || { echo "错误: $variant 缺少 exe" >&2; exit 1; }
-              done ;;
-          esac
+          suffix=""
+          if [[ "$VARIANT" == bundled ]]; then suffix="-bundled"; fi
+          deb="$PWD/release-files/DeepSeekHarness_${APP_VERSION}_amd64${suffix}.deb"
+          bash scripts/smoke-linux-installer.sh "$deb" "$VARIANT" "$APP_VERSION" "$NODE_VERSION" "$BUNDLED_DSH_VERSION"
 
-      # ditto 打包 .app 以保留符号链接与执行权限，行为与 zip -r 不同、更稳妥；
-      # zip 文件名带架构后缀，避免多个矩阵产物重名。仅 macOS 产物有 .app（Linux 走 deb）。
-      - name: 打包 .app 为 zip（仅 macOS，且仅 tag 触发时）
-        if: runner.os == 'macOS' && github.ref_type == 'tag'
-        run: |
-          cd dist/release/plain
-          ditto -c -k --keepParent "DeepSeekHarness.app" "$GITHUB_WORKSPACE/DeepSeek-Harness-${{ matrix.arch }}-${{ github.ref_name }}.zip"
-          cd "$GITHUB_WORKSPACE/dist/release/bundled"
-          ditto -c -k --keepParent "DeepSeekHarness.app" "$GITHUB_WORKSPACE/DeepSeek-Harness-bundled-${{ matrix.arch }}-${{ github.ref_name }}.zip"
-
-      # 仅 tag 触发时创建/更新 Release（手动触发只构建不发布）；
-      # tag_name 显式指定，避免以分支名创建脏 tag。
-      - name: 创建 Release 并上传 dmg / deb / exe / zip
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v3
+  publish:
+    name: 统一发布 GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [prepare, integrity, smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
         with:
-          tag_name: ${{ github.ref_name }}
-          # 从触发的 tag 自动生成 Release；按平台产出上传：
-          # macOS → dmg + .app zip；Linux → deb；Windows → NSIS exe。glob 在无匹配平台自然跳过。
-          files: |
-            dist/release/plain/*.dmg
-            dist/release/bundled/*.dmg
-            dist/release/plain/*.deb
-            dist/release/bundled/*.deb
-            dist/release/plain/*.exe
-            dist/release/bundled/*.exe
-            DeepSeek-Harness-${{ matrix.arch }}-${{ github.ref_name }}.zip
-            DeepSeek-Harness-bundled-${{ matrix.arch }}-${{ github.ref_name }}.zip
-          generate_release_notes: true
-          # 在 Release 正文中写入安装与使用说明，
-          # generate_release_notes 生成的提交记录会自动追加到 body 之后。
-          body: |
-            ## ⬇️ Mac 用户选哪个？/ Which one to download? (macOS only)
-
-            **中文：** 仅 Mac 需要选择架构（Linux / Windows 用户跳过此步）。打开「左上角  → 关于本机」，看「芯片」一栏即可确定：
-
-            | 芯片 | 下载 |
-            | --- | --- |
-            | **Apple（M 系列）**：M1 / M2 / M3 / M4…（2020 年后机型） | `*_aarch64.dmg`（或 zip 版 `DeepSeek-Harness-aarch64-*.zip`） |
-            | **Intel**：Core i3 / i5 / i7…（2020 年前机型） | `*_x64.dmg`（或 zip 版 `DeepSeek-Harness-x86_64-*.zip`） |
-
-            **English:** (macOS only — Linux / Windows users can skip this section.) Click the Apple logo  → **About This Mac**, check the "Chip" line:
-
-            | Chip | Download |
-            | --- | --- |
-            | **Apple (M-series)**: M1 / M2 / M3 / M4… (2020 and later) | `*_aarch64.dmg` (or zip: `DeepSeek-Harness-aarch64-*.zip`) |
-            | **Intel**: Core i3 / i5 / i7… (before 2020) | `*_x64.dmg` (or zip: `DeepSeek-Harness-x86_64-*.zip`) |
-
-            ## 安装 / Installation
-
-            **Mac (中文):** 打开下载的 dmg，把 `DeepSeekHarness.app` 拖入「应用程序」目录。首次打开若提示「无法打开，因为无法验证开发者」，这是 macOS Gatekeeper 对未做开发者签名应用的保护，处理方式二选一：右键 app → 打开；或「系统设置 → 隐私与安全性 → 仍要打开」，放行一次后即可正常使用（本应用未做开发者签名，属正常现象）。若提示「已损坏，无法打开」（macOS 对未签名应用的常见误报，文件通常没坏）：先确认下载的架构与你的 Mac 匹配（Intel Mac 装 aarch64 版会报错）；仍不行则在「终端」执行 `xattr -dr com.apple.quarantine /Applications/DeepSeekHarness.app` 后重新打开。
-
-            **Mac (English):** Open the downloaded dmg and drag `DeepSeekHarness.app` into the **Applications** folder. If macOS says "cannot be opened because the developer cannot be verified" the first time, that's Gatekeeper protecting the unsigned app: right-click the app → Open, or go to **System Settings → Privacy & Security → Open Anyway**; after allowing it once, it works normally (this app is not developer-signed, which is normal). If macOS says the app is "damaged and can't be opened" (a common false positive for unsigned apps; the file is usually fine): make sure you downloaded the build matching your Mac's architecture (an Intel Mac installing the `aarch64` build will error); if it still fails, run `xattr -dr com.apple.quarantine /Applications/DeepSeekHarness.app` in Terminal and open it again.
-
-            **Linux (中文):** 下载 `*.deb`（内置版为 `*-bundled_*.deb`）后 `sudo dpkg -i <文件>.deb`（缺依赖时先 `sudo apt -f install`）。应用不提供 AppImage。
-
-            **Linux (English):** Download the `*.deb` (`*-bundled_*.deb` for the embedded-runtime build) and run `sudo dpkg -i <file>.deb` (run `sudo apt -f install` first if dependencies are missing). No AppImage is provided.
-
-            **Windows (中文):** 下载 `*-setup.exe`（内置版为 `*-bundled-setup.exe`）安装即可。若提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」（未做代码签名，属正常现象）。
-
-            **Windows (English):** Download and run `*-setup.exe` (`*-bundled-setup.exe` for the embedded-runtime build). If SmartScreen shows "Windows protected your PC", click **More info → Run anyway** (the app is not code-signed, which is normal).
-
-            ## 使用 / Usage
-
-            **中文：** 启动后自动探测并拉起 DSH Web 服务（默认 `127.0.0.1:3080`），常驻系统托盘；设置页可配置退出时是否停止服务、检测应用更新，以及开启局域网扫码配对访问（默认 `0.0.0.0:18080`）。
-
-            **English:** On launch the app auto-detects and starts the DSH Web service (default `127.0.0.1:3080`) and lives in the system tray; the settings page lets you choose whether to stop the service on quit, check for app updates, and enable LAN QR-code pairing access (default `0.0.0.0:18080`).
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.integrity.outputs.artifact_ids }}
+          path: release-files
+          merge-multiple: true
+          digest-mismatch: error
+      - name: 核对产物并发布
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/release-artifacts.py verify "$APP_VERSION" release-files
+          bash scripts/publish-release.sh "$RELEASE_TAG" release-files
