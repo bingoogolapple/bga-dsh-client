@@ -29,7 +29,7 @@ jobs:
       dsh_version: ${{ steps.versions.outputs.dsh_version }}
       pnpm_version: ${{ steps.versions.outputs.pnpm_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: 读取 App 和运行时版本
@@ -99,7 +99,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: 检出源码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -129,23 +129,17 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: 安装 pnpm
-        # Node24 runtime 版本；version: 9 为 CI 构建工具版本，与
-        # pnpm-lock.yaml 的 lockfileVersion 匹配（非内置运行时版本）。
-        uses: pnpm/action-setup@v6
-        with:
-          version: 9
-
       - name: 安装 Node.js
-        # Node24 runtime 版本；node-version: 22 为 CI 构建环境版本
-        # （LTS，与内置运行时版本相互独立）。
-        # 本项目 package.json 无 packageManager 字段，自动缓存检测不会触发，
-        # 故显式声明 cache: pnpm 与 lockfile 路径。
         uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: '26'
+
+      - name: 安装 pnpm
+        # 从根目录 package.json 读取构建工具版本，并按 pnpm-lock.yaml 缓存 store。
+        uses: pnpm/setup@v3.2.0
+        with:
+          cache: true
+          install: false
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -262,7 +256,7 @@ jobs:
     outputs:
       artifact_ids: ${{ steps.ids.outputs.all }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: 检查产物 ID
@@ -324,7 +318,7 @@ jobs:
       BUNDLED_DSH_VERSION: ${{ needs.prepare.outputs.dsh_version }}
       VARIANT: ${{ startsWith(matrix.variant, 'plain') && 'plain' || 'bundled' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
@@ -375,7 +369,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
