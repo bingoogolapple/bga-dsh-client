@@ -82,6 +82,27 @@ if [[ "$variant" == "bundled" || "$variant" == "two" ]]; then
   BUNDLE_EXTRA=(--config '{"bundle":{"resources":{"resources/runtime":"runtime"}}}')
 fi
 
+# Intel runner 上，Tauri 为布置 DMG 挂载的可写映像在卸载时曾超时。
+# 先在普通目录放好 .app 和 Applications 链接，再直接生成只读压缩映像。
+build_intel_dmg() (
+  local app="$1" out_dir="$2" variant="$3"
+  local app_name="${app##*/}"
+  local product="${app_name%.app}"
+  local version staging dmg suffix=""
+  version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+  if [[ "$variant" == "bundled" ]]; then suffix="-bundled"; fi
+  dmg="${product}_${version}_x64${suffix}.dmg"
+  staging="$(mktemp -d "$out_dir/.dmg.XXXXXXXX")"
+  trap 'rm -rf "$staging"' EXIT
+
+  mkdir "$staging/payload"
+  ditto "$app" "$staging/payload/$app_name"
+  ln -s /Applications "$staging/payload/Applications"
+  hdiutil create -srcfolder "$staging/payload" -volname "$product" -fs HFS+ -format ULFO "$staging/$dmg"
+  hdiutil verify "$staging/$dmg"
+  mv "$staging/payload/$app_name" "$staging/$dmg" "$out_dir/"
+)
+
 build_one() {
   variant="$1"
   out_dir="dist/release/$variant"
@@ -89,13 +110,27 @@ build_one() {
   mkdir -p "$out_dir"
 
   echo "==> tauri build ($variant)…"
-  if [[ "$variant" == "bundled" ]]; then
-    npm run tauri -- build "${BUNDLE_EXTRA[@]:-}"
-  else
-    npm run tauri -- build
+  local tauri_args=(build)
+  local intel_dmg=0
+  if [[ "${TAURI_BUILD_VERBOSE:-0}" == 1 ]]; then
+    tauri_args+=(--verbose)
   fi
+  if [[ "$variant" == "bundled" ]]; then
+    tauri_args+=("${BUNDLE_EXTRA[@]}")
+  fi
+  if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "x86_64" ]]; then
+    intel_dmg=1
+    tauri_args+=(--bundles app)
+  fi
+  npm run tauri -- "${tauri_args[@]}"
 
   bundle_root="src-tauri/target/release/bundle"
+  if [[ "$intel_dmg" == 1 ]]; then
+    build_intel_dmg "$bundle_root/macos/DeepSeekHarness.app" "$out_dir" "$variant"
+    echo "==> 产物: $out_dir"
+    ls -la "$out_dir"
+    return
+  fi
   if [[ -d "$bundle_root/macos" ]]; then
     cp -R "$bundle_root/macos/"*.app "$out_dir/" 2>/dev/null || true
   fi

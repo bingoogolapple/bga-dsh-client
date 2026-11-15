@@ -1,6 +1,6 @@
 [package]
 name = "bga-dsh-client"
-version = "0.0.13"
+version = "0.0.14"
 description = "DSH Web GUI 的 Tauri 桌面壳"
 license = "MIT"
 edition = "2021"
@@ -43,6 +43,9 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 # 线程安全的 localtime_s，同样依赖 libc（注意 Windows 上没有 localtime/localtime_r）。
 [target.'cfg(any(unix, windows))'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+dunce = "1.0.5"
 
 [profile.release]
 strip = true

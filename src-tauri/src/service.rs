@@ -9,9 +9,7 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::process::Command;
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -23,8 +21,20 @@ use crate::i18n::tr;
 use crate::AppState;
 
 pub const DSH_PORT: u16 = 3080;
-/// npx 首次运行需要下载包，给足时间。
+/// 已安装的 dsh 进程开始监听前的等待时间。
 const START_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn startup_timeout(uses_npx: bool) -> Duration {
+    if uses_npx {
+        // npx 在缓存未命中时，先下载并安装依赖，再启动 Web 服务。
+        crate::dsh::DOWNLOAD_TIMEOUT + START_TIMEOUT
+    } else {
+        START_TIMEOUT
+    }
+}
+
+// 显式跟随 npm 的 latest 标签，即使它指向预发布版本。
+const NPX_DSH_COMMAND: &str = "npx --yes @deepseek-ai/dsh@latest web --no-open";
 
 /// 内置运行时在 Resources 中的目录名（与 scripts/bundle-runtime.mjs 的输出一致）。
 const RUNTIME_DIR: &str = "runtime";
@@ -42,7 +52,7 @@ impl LaunchMethod {
     /// 用于展示给用户的命令描述。
     fn display(self, locale: crate::i18n::Locale) -> String {
         match self {
-            Self::Npx => "npx --yes @deepseek-ai/dsh web".into(),
+            Self::Npx => NPX_DSH_COMMAND.into(),
             Self::Builtin => tr(locale, "mth.builtin", &[]),
         }
     }
@@ -51,8 +61,17 @@ impl LaunchMethod {
 /// 内置 Node.js 运行时根目录：<Resources>/runtime。
 /// 非内置版打包没有该目录，返回 None（此时自动走 npx 拉起）。
 pub fn runtime_root(handle: &AppHandle) -> Option<PathBuf> {
-    let dir = handle.path().resource_dir().ok()?.join(RUNTIME_DIR);
+    let dir = bundled_runtime_dir(&handle.path().resource_dir().ok()?);
     dir.is_dir().then_some(dir)
+}
+
+fn bundled_runtime_dir(resource_dir: &Path) -> PathBuf {
+    let dir = resource_dir.join(RUNTIME_DIR);
+    // Tauri 在 Windows 上返回规范化路径，Node 的脚本加载器不兼容 \\?\ 前缀。
+    // 仅在兼容路径与原路径等价时去掉前缀。
+    #[cfg(windows)]
+    let dir = dunce::simplified(&dir).to_path_buf();
+    dir
 }
 
 /// 内置运行时的 Node 可执行文件与 dsh 入口。
@@ -349,18 +368,13 @@ impl ServiceManager {
 
         self.starting.store(true, Ordering::SeqCst);
         self.failed.store(false, Ordering::SeqCst);
-        self.set_detail(
-            handle,
-            tr(crate::i18n::current(handle), "svc.starting", &[]),
-        );
-        self.emit_status(handle);
         let start_time = Instant::now();
 
         let runtime = runtime_root(handle);
 
         // 用户选定版本：直接用 ~/.dsh/dsh-versions/<ver>/node_modules/@deepseek-ai/dsh/lib/bin.js
         let pinned = crate::state::settings(handle).dsh_version.clone();
-        let (shell_cmd, cwd, launch_method_display) = if let Some(ref ver) = pinned {
+        let (launch, launch_method_display) = if let Some(ref ver) = pinned {
             let bin_js = crate::dsh::dsh_versions_dir(handle)
                 .join(ver)
                 .join("node_modules")
@@ -379,33 +393,31 @@ impl ServiceManager {
                 {
                     builtin_bin_js
                 } else {
-                    bin_js // 不存在，后续 spawn_shell 会报错
+                    bin_js // 不存在，启动时会报错
                 }
             } else {
                 bin_js
             };
-            let node = runtime.as_deref().and_then(runtime_entry).map(|(n, _)| n);
-            let node_str = node
-                .map(|n| n.display().to_string())
-                .unwrap_or_else(|| "node".into());
+            let node = runtime
+                .as_deref()
+                .and_then(runtime_entry)
+                .map(|(node, _)| node)
+                .unwrap_or_else(|| PathBuf::from("node"));
             #[cfg(not(windows))]
-            let cmd = {
+            let launch = {
                 let path_prefix = shell_path_prefix();
-                format!(
-                    "{path_prefix}exec \"{node}\" \"{bin_js}\" web --no-open",
-                    path_prefix = path_prefix,
-                    node = node_str,
-                    bin_js = bin_js.display()
+                StartCommand::shell(
+                    format!(
+                        "{path_prefix}exec \"{}\" \"{}\" web --no-open",
+                        node.display(),
+                        bin_js.display()
+                    ),
+                    false,
                 )
             };
             #[cfg(windows)]
-            let cmd = format!(
-                "\"{node}\" \"{bin_js}\" web --no-open",
-                node = node_str,
-                bin_js = bin_js.display()
-            );
-            let display = ver.to_string();
-            (cmd, None, display)
+            let launch = StartCommand::node(&node, &bin_js);
+            (launch, ver.to_string())
         } else {
             // 拉起方式完全自动：内置版（应用自带 runtime）用内置 Node.js，普通版用 npx。
             let launch_method = if runtime.is_some() {
@@ -416,13 +428,28 @@ impl ServiceManager {
             // 先确保 npx 独立缓存目录存在（绕过用户 ~/.npm 的权限/损坏问题）。
             let npm_cache = files_dir(handle).join("npm-cache");
             let _ = std::fs::create_dir_all(&npm_cache);
-            let (cmd, cwd) = build_command(launch_method, runtime.as_deref(), Some(&npm_cache));
+            let launch = build_command(launch_method, runtime.as_deref(), Some(&npm_cache));
             let display = launch_method.display(crate::i18n::current(handle));
-            (cmd, cwd, display)
+            (launch, display)
         };
+        let StartCommand {
+            process,
+            log_line: shell_cmd,
+            uses_npx,
+        } = launch;
+        let starting_detail = if uses_npx {
+            "svc.starting_npx"
+        } else {
+            "svc.starting"
+        };
+        self.set_detail(
+            handle,
+            tr(crate::i18n::current(handle), starting_detail, &[]),
+        );
+        self.emit_status(handle);
         let log_path = files_dir(handle).join("service.log");
 
-        let child = match spawn_shell(&shell_cmd, cwd.as_deref(), &log_path) {
+        let child = match spawn_logged(process, &log_path) {
             Ok(c) => c,
             Err(e) => {
                 self.starting.store(false, Ordering::SeqCst);
@@ -444,20 +471,21 @@ impl ServiceManager {
         *crate::state::lock(&self.child) = Some(child);
 
         // 等待端口就绪（或进程退出 / 超时）。
-        let deadline = Instant::now() + START_TIMEOUT;
+        let deadline = Instant::now() + startup_timeout(uses_npx);
         let mut exited = false;
         loop {
             {
                 let mut guard = crate::state::lock(&self.child);
-                if let Some(c) = guard.as_mut() {
-                    match c.try_wait() {
-                        Ok(Some(_)) => {
-                            exited = true;
-                            break;
-                        }
-                        Ok(None) => {}
-                        Err(_) => break,
+                let Some(child) = guard.as_mut() else {
+                    return; // 应用退出时 shutdown/detach 已接管子进程。
+                };
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        exited = true;
+                        break;
                     }
+                    Ok(None) => {}
+                    Err(_) => break,
                 }
             }
             if Self::is_up() {
@@ -485,9 +513,11 @@ impl ServiceManager {
         } else {
             self.starting.store(false, Ordering::SeqCst);
             self.failed.store(true, Ordering::SeqCst);
-            if let Some(mut c) = crate::state::lock(&self.child).take() {
-                let _ = c.kill();
-                let _ = c.wait();
+            let child = crate::state::lock(&self.child).take();
+            if !exited {
+                if let Some(mut child) = child {
+                    kill_tree(&mut child);
+                }
             }
             self.clear_pid(handle);
             let locale = crate::i18n::current(handle);
@@ -1256,6 +1286,11 @@ pub(crate) fn is_legacy_without_launch_token(version: &str) -> bool {
 pub(crate) fn path_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut dirs: Vec<PathBuf> = Vec::new();
+    // 优先使用调用方选好的 Node.js。系统目录和版本管理器的目录仅用于补全 PATH，
+    // 以免桌面启动时缺少 node/npx，也避免覆盖命令行中已选定的 Node.js 版本。
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path).filter(|dir| !dir.as_os_str().is_empty()));
+    }
     // nvm：~/.nvm/versions/node/<v*>/bin（可能有多个版本，全部纳入）
     if let Ok(rd) = std::fs::read_dir(PathBuf::from(&home).join(".nvm/versions/node")) {
         for e in rd.flatten() {
@@ -1278,20 +1313,11 @@ pub(crate) fn path_dirs() -> Vec<PathBuf> {
     }
     dirs.push(PathBuf::from("/opt/homebrew/bin"));
     dirs.push(PathBuf::from("/usr/local/bin"));
-    // 系统工具（sh/sed/dirname/uname…）：显式兜底 + 继承父进程 PATH。
-    // 继承的 PATH 必须按 ':' 拆分成段再过滤，整体作为一个路径会被 is_dir 过滤掉，
-    // 导致 /usr/bin、/bin 丢失（npx 里 npm 会 spawn sh，pnpm 脚本要用 sed 等）。
+    // 系统工具（sh/sed/dirname/uname…）：显式兜底。
     dirs.push(PathBuf::from("/usr/bin"));
     dirs.push(PathBuf::from("/bin"));
     dirs.push(PathBuf::from("/usr/sbin"));
     dirs.push(PathBuf::from("/sbin"));
-    if let Ok(cur) = std::env::var("PATH") {
-        for seg in cur.split(':') {
-            if !seg.is_empty() {
-                dirs.push(PathBuf::from(seg));
-            }
-        }
-    }
     let mut seen = std::collections::HashSet::new();
     dirs.into_iter()
         .filter(|d| d.is_dir() && seen.insert(d.to_string_lossy().into_owned()))
@@ -1309,9 +1335,55 @@ pub(crate) fn shell_path_prefix() -> String {
     format!("export PATH=\"{entries}\" 2>/dev/null; ")
 }
 
-/// 按自动判定的方式构造 shell 命令（返回命令与工作目录，后者恒为 None）。
-/// - `Npx`：`npx --yes @deepseek-ai/dsh web --no-open`
-///   （普通版，依赖系统 node/npx；不带版本号 → npx 解析 npm `latest` 标签，
+struct StartCommand {
+    process: Command,
+    log_line: String,
+    uses_npx: bool,
+}
+
+impl StartCommand {
+    fn shell(cmd: String, uses_npx: bool) -> Self {
+        #[cfg(unix)]
+        let process = {
+            let mut process = Command::new("sh");
+            process.arg("-lc").arg(&cmd);
+            process
+        };
+        #[cfg(windows)]
+        let process = {
+            use std::os::windows::process::CommandExt;
+
+            let mut process = crate::hidden_command("cmd");
+            process.args(["/D", "/S", "/C"]).raw_arg(&cmd);
+            process
+        };
+        Self {
+            process,
+            log_line: cmd,
+            uses_npx,
+        }
+    }
+
+    #[cfg(windows)]
+    fn node(node: &Path, bin_js: &Path) -> Self {
+        // 直接执行 Node，应用安装路径和脚本路径由系统作为单独参数传递。
+        let mut process = crate::hidden_command(node);
+        process.arg(bin_js).args(["web", "--no-open"]);
+        Self {
+            process,
+            log_line: format!(
+                "\"{}\" \"{}\" web --no-open",
+                node.display(),
+                bin_js.display()
+            ),
+            uses_npx: false,
+        }
+    }
+}
+
+/// 按自动判定的方式构造服务启动命令。
+/// - `Npx`：`npx --yes @deepseek-ai/dsh@latest web --no-open`
+///   （普通版，依赖系统 node/npx，显式解析 npm `latest` 标签，
 ///   metadata 有缓存秒回；新版本发布后首次启动才会下载，之后复用 npm 缓存秒启。
 ///   绝不加 `--prefer-online`——那会强制每次重新下载整个依赖树，重启卡死）
 /// - `Builtin`：用内置 Node.js 直跑 dsh（内置版，离线可用）
@@ -1326,30 +1398,28 @@ fn build_command(
     method: LaunchMethod,
     runtime: Option<&Path>,
     npm_cache: Option<&Path>,
-) -> (String, Option<String>) {
+) -> StartCommand {
     #[cfg(windows)]
     {
+        if let (LaunchMethod::Builtin, Some((node, bin_js))) =
+            (method, runtime.and_then(runtime_entry))
+        {
+            return StartCommand::node(&node, &bin_js);
+        }
+        // 普通版和内置 runtime 缺失时都走 npx。
         // Windows 走 cmd：用 set 语法注入 npm 缓存目录（值含分隔符与可能的空格，带引号）
         let npm_prefix = match npm_cache {
             Some(p) => format!("set \"npm_config_cache={}\" && ", p.display()),
             None => String::new(),
         };
-        let npx_dsh = "npx --yes @deepseek-ai/dsh web --no-open";
-        match method {
-            LaunchMethod::Npx => (format!("{npm_prefix}{npx_dsh}"), None),
-            LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
-                Some((node, bin_js)) => (
-                    format!(
-                        "\"{}\" \"{}\" web --no-open",
-                        node.display(),
-                        bin_js.display()
-                    ),
-                    None,
-                ),
-                // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => (format!("{npm_prefix}{npx_dsh}"), None),
-            },
-        }
+        let mut launch = StartCommand::shell(format!("{npm_prefix}{NPX_DSH_COMMAND}"), true);
+        // dsh 首次安装会并发下载数百个依赖。提高 npm 默认的 15 个连接上限，
+        // 并避免在启动 Web 服务前等待 npm 的在线审计。
+        launch.process.envs([
+            ("npm_config_maxsockets", "48"),
+            ("npm_config_audit", "false"),
+        ]);
+        launch
     }
     #[cfg(not(windows))]
     {
@@ -1362,9 +1432,9 @@ fn build_command(
             ),
             None => String::new(),
         };
-        let npx_dsh = "exec npx --yes @deepseek-ai/dsh web --no-open";
+        let npx_dsh = format!("{path_prefix}{npm_prefix}exec {NPX_DSH_COMMAND}");
         match method {
-            LaunchMethod::Npx => (format!("{path_prefix}{npm_prefix}{npx_dsh}"), None),
+            LaunchMethod::Npx => StartCommand::shell(npx_dsh, true),
             LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
                 Some((node, bin_js)) => {
                     // 内置 PATH：捆绑 node bin + dsh-runtime/.bin 置前，dsh plugin 的 pnpm / npx 能找到
@@ -1387,17 +1457,17 @@ fn build_command(
                         .map(|d| d.to_string_lossy().into_owned())
                         .collect::<Vec<_>>()
                         .join(":");
-                    (
+                    StartCommand::shell(
                         format!(
                             "export PATH=\"{entries}\" 2>/dev/null; exec \"{}\" \"{}\" web --no-open",
                             node.display(),
                             bin_js.display()
                         ),
-                        None,
+                        false,
                     )
                 }
                 // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => (format!("{path_prefix}{npm_prefix}{npx_dsh}"), None),
+                None => StartCommand::shell(npx_dsh, true),
             },
         }
     }
@@ -1408,56 +1478,24 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// 启动 shell 子进程；stdout/stderr 追加写入日志文件（放生安全）。
-#[cfg(unix)]
-fn spawn_shell(cmd: &str, cwd: Option<&str>, log_path: &std::path::Path) -> std::io::Result<Child> {
-    use std::os::unix::process::CommandExt;
+/// 启动子进程；stdout/stderr 追加写入日志文件（放生安全）。
+fn spawn_logged(mut process: Command, log_path: &Path) -> std::io::Result<Child> {
     let out = OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)?;
     let err = out.try_clone()?;
-    let mut c = Command::new("sh");
-    c.arg("-lc").arg(cmd);
-    c.stdin(Stdio::null())
+    process
+        .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
     // 独立进程组，便于整树停止。
-    c.process_group(0);
-    if let Some(d) = cwd {
-        c.current_dir(d);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.process_group(0);
     }
-    c.spawn()
-}
-
-#[cfg(windows)]
-fn windows_shell_command(cmd: &str) -> String {
-    if cmd.starts_with('"') {
-        format!("\"{cmd}\"")
-    } else {
-        cmd.to_owned()
-    }
-}
-
-#[cfg(windows)]
-fn spawn_shell(cmd: &str, cwd: Option<&str>, log_path: &std::path::Path) -> std::io::Result<Child> {
-    use std::os::windows::process::CommandExt;
-
-    let out = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
-    let err = out.try_clone()?;
-    let mut c = crate::hidden_command("cmd");
-    c.args(["/D", "/S", "/C"])
-        .raw_arg(windows_shell_command(cmd));
-    c.stdin(Stdio::null())
-        .stdout(Stdio::from(out))
-        .stderr(Stdio::from(err));
-    if let Some(d) = cwd {
-        c.current_dir(d);
-    }
-    c.spawn()
+    process.spawn()
 }
 
 /// 判断 PID 对应的进程是否存活。
@@ -1669,6 +1707,8 @@ fn kill_group(pid: u32) {
 /// 结束子进程整棵树并回收。
 fn kill_tree(child: &mut Child) {
     kill_group(child.id());
+    // 进程组清理失败时，仍直接结束并回收受管理的子进程。
+    let _ = child.kill();
     let _ = child.wait();
 }
 
@@ -1676,17 +1716,35 @@ fn kill_tree(child: &mut Child) {
 mod tests {
     use super::*;
 
-    /// 普通版（Npx）：命令包含 npx @deepseek-ai/dsh web --no-open（不自动弹浏览器），
-    /// 且注入独立 npm 缓存目录。
+    #[test]
+    fn startup_timeout_accounts_for_cold_npx_install() {
+        assert_eq!(startup_timeout(true), Duration::from_secs(720));
+        assert_eq!(startup_timeout(false), Duration::from_secs(180));
+    }
+
+    /// 普通版（Npx）：显式跟随 latest，不自动打开浏览器，并注入独立 npm 缓存目录。
     #[test]
     fn build_command_npx_injects_cache() {
-        let (cmd, cwd) = build_command(LaunchMethod::Npx, None, Some(Path::new("/tmp/npm-cache")));
-        assert!(cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"));
+        let launch = build_command(LaunchMethod::Npx, None, Some(Path::new("/tmp/npm-cache")));
+        let cmd = launch.log_line;
+        assert!(cmd.contains("npx --yes @deepseek-ai/dsh@latest web --no-open"));
         // 严禁 --prefer-online：会强制每次重新下载整个依赖树，导致重启卡死
         assert!(!cmd.contains("prefer-online"), "cmd: {cmd}");
         assert!(cmd.contains("npm_config_cache"));
         assert!(cmd.contains("/tmp/npm-cache"));
-        assert_eq!(cwd, None);
+        assert!(launch.uses_npx);
+        #[cfg(windows)]
+        {
+            let env: std::collections::HashMap<_, _> = launch.process.get_envs().collect();
+            assert_eq!(
+                env[std::ffi::OsStr::new("npm_config_maxsockets")],
+                Some(std::ffi::OsStr::new("48"))
+            );
+            assert_eq!(
+                env[std::ffi::OsStr::new("npm_config_audit")],
+                Some(std::ffi::OsStr::new("false"))
+            );
+        }
     }
 
     /// 内置版（Builtin）+ runtime 存在：直接使用捆绑 node 直跑 dsh，而非 npx。
@@ -1694,7 +1752,9 @@ mod tests {
     fn build_command_builtin_uses_runtime_entry() {
         // 构造一个模拟的 runtime 布局：nd/bin/node（类 unix）或 nd/node.exe（win）
         // + rt/node_modules/@deepseek-ai/dsh/lib/bin.js
-        let fake = std::env::temp_dir().join("dsh-fake-runtime-test");
+        let resource_dir =
+            std::env::temp_dir().join(format!("dsh fake runtime test {}", std::process::id()));
+        let fake = bundled_runtime_dir(&resource_dir);
         let node = if cfg!(windows) {
             fake.join("nd").join("node.exe")
         } else {
@@ -1712,26 +1772,51 @@ mod tests {
         std::fs::write(&node, "").unwrap();
         std::fs::write(&bin_js, "").unwrap();
 
-        let (cmd, cwd) = build_command(LaunchMethod::Builtin, Some(&fake), None);
+        let launch = build_command(LaunchMethod::Builtin, Some(&fake), None);
+        let cmd = launch.log_line;
         assert!(cmd.contains(node.to_str().unwrap()), "cmd: {cmd}");
         assert!(cmd.contains(bin_js.to_str().unwrap()), "cmd: {cmd}");
         assert!(cmd.contains("web --no-open"), "cmd: {cmd}");
         // 不再走 npx
         assert!(!cmd.contains("npx"), "cmd: {cmd}");
-        assert_eq!(cwd, None);
-        let _ = std::fs::remove_dir_all(&fake);
+        assert!(!launch.uses_npx);
+        #[cfg(windows)]
+        {
+            assert_eq!(launch.process.get_program(), node.as_os_str());
+            assert!(launch.process.get_args().eq([
+                bin_js.as_os_str(),
+                std::ffi::OsStr::new("web"),
+                std::ffi::OsStr::new("--no-open"),
+            ]));
+        }
+        let _ = std::fs::remove_dir_all(&resource_dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_runtime_dir_simplifies_tauri_windows_path() {
+        assert_eq!(
+            bundled_runtime_dir(Path::new(r"\\?\C:\Program Files\DeepSeekHarness")),
+            Path::new(r"C:\Program Files\DeepSeekHarness\runtime"),
+        );
+        assert_eq!(
+            bundled_runtime_dir(Path::new(r"\\?\C:\CON\DeepSeekHarness")),
+            Path::new(r"\\?\C:\CON\DeepSeekHarness\runtime"),
+        );
     }
 
     /// 内置版 + runtime 缺失（异常/开发目录）：安全回退 npx，让日志暴露原因。
     #[test]
     fn build_command_builtin_falls_back_to_npx() {
-        let (cmd, _cwd) = build_command(
+        let launch = build_command(
             LaunchMethod::Builtin,
             None,
             Some(Path::new("/tmp/npm-cache")),
         );
+        assert!(launch.uses_npx);
+        let cmd = launch.log_line;
         assert!(
-            cmd.contains("npx --yes @deepseek-ai/dsh web --no-open"),
+            cmd.contains("npx --yes @deepseek-ai/dsh@latest web --no-open"),
             "cmd: {cmd}"
         );
     }
@@ -1812,15 +1897,5 @@ mod tests {
         assert!(!is_legacy_without_launch_token("0.1.10"));
         assert!(!is_legacy_without_launch_token("0.1.2-alpha.1"));
         assert!(!is_legacy_without_launch_token("0.1.2"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_shell_wraps_a_quoted_executable_for_cmd_c() {
-        let cmd = r#""node" "C:\Program Files\dsh\bin.js" web --no-open"#;
-        assert_eq!(
-            windows_shell_command(cmd),
-            "\"\"node\" \"C:\\Program Files\\dsh\\bin.js\" web --no-open\""
-        );
     }
 }

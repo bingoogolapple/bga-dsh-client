@@ -1,7 +1,7 @@
 # DeepSeek Harness 客户端
 
 [![Latest Release](https://img.shields.io/github/v/release/bingoogolapple/bga-dsh-client)](../../releases/latest)
-[![Bundled DSH](https://img.shields.io/badge/dsh-0.2.1--rc.2-4D6BFE)](scripts/bundle-runtime.mjs)
+[![Bundled DSH](https://img.shields.io/badge/dsh-0.2.2--rc.1-4D6BFE)](scripts/bundle-runtime.mjs)
 [![Bundled Node](https://img.shields.io/badge/node-v24.20.0-339933)](scripts/bundle-runtime.mjs)
 [![Bundled pnpm](https://img.shields.io/badge/pnpm-11.25.0-F69220)](scripts/bundle-runtime.mjs)
 [![Build](https://img.shields.io/github/actions/workflow/status/bingoogolapple/bga-dsh-client/release.yml)](../../actions/workflows/release.yml)
@@ -23,7 +23,7 @@
 ### ⚙️ 服务管理
 
 - **启动 / 重启 / 停止**服务：可分别从主界面底部、设置页、托盘菜单操作；可验证归属的外部 DSH 同样支持管理，普通未知占端口程序保持保护。
-- **两种拉起方式，完全自动**（无需配置）：普通版（plain）使用 `npx --yes @deepseek-ai/dsh web --no-open` 拉起 dsh 服务（自动跟随 npm 最新版；已缓存的安装复用，重启秒启——严禁 `--prefer-online`，那会每次重新下载整个依赖树导致重启卡死）；内置版（bundled，仅 `-bundled` 产物）应用自带 Node.js 与 dsh，完全离线可用。应用按构建类型自动选择。
+- **两种拉起方式，完全自动**（无需配置）：普通版（plain）使用 `npx --yes @deepseek-ai/dsh@latest web --no-open` 拉起 dsh 服务（自动跟随 npm 最新版；已缓存的安装复用，重启秒启——严禁 `--prefer-online`，那会每次重新下载整个依赖树导致重启卡死）；内置版（bundled，仅 `-bundled` 产物）应用自带 Node.js 与 dsh，完全离线可用。应用按构建类型自动选择。
 - **自动探测 + 自动接管**：启动时探测 3080 端口——可识别的外部 DSH 直接接管并允许停止/重启；无法确认归属的普通占端口程序只复用、不操作。
 - 若在「dsh 版本管理」中指定了具体版本，则始终以该版本启动（优先级最高），默认的自动拉起逻辑不再生效，详见下文「📦 dsh 版本管理」。
 - 服务日志实时滚动展示，写入系统 app_config 目录的 `service.log`；超过 5MB 自动轮转（保留两份旧档）。npx 使用**独立缓存目录**（不读写用户 `~/.npm`，绕开权限/缓存损坏问题）。
@@ -99,7 +99,7 @@
    - **Windows**：`.exe` 安装程序（NSIS），双击运行即可。
    - **Linux**：`.deb` 包，使用 `dpkg -i` 安装。
 
-   > 💡 **想最省事？优先下载文件名带 `-bundled` 后缀的安装包**（如 `DeepSeekHarness-bundled-macos-aarch64.dmg`）。它会**内置 Node.js / npx / dsh 运行时，完全离线可用**，双击即用，不需要你在本机准备任何开发环境；普通版（文件名不带 `-bundled`）则需要系统已装好 Node.js / npx / dsh 才能拉起服务。
+   > 💡 **想最省事？优先下载文件名带 `-bundled` 后缀的安装包**（如 `DeepSeekHarness-bundled-macos-aarch64.dmg`）。它会**内置 Node.js / npx / dsh 运行时，完全离线可用**，双击即用，不需要你在本机准备任何开发环境；普通版（文件名不带 `-bundled`）需要在系统 PATH 上准备满足当前 dsh 要求的 Node.js 和 npx，首次启动时会联网下载 dsh。
 2. 启动 DeepSeekHarness，应用会自动探测本机是否已有 DSH 服务运行；如果没有则按设置页配置的方式自动拉起。
 
 > **macOS 打开报错处理**（本项目未做开发者签名与公证，被 Gatekeeper 拦截属正常现象）：
@@ -202,6 +202,16 @@ pnpm two              # 一次出两个版本：普通版（plain）+ 捆绑版�
 | **bundled** | `pnpm bundled` | 内置 Node.js + pnpm + dsh，离线可用 | 体积大，开箱即用，产物名带 `-bundled` 后缀 |
 | **two** | `pnpm two` | 同时产出 plain + bundled | 一次构建两个版本，方便同时分发 |
 
+### 安装包冷启动验证
+
+用 GitHub CLI 手动运行 **Installer cold start**，选择要验证的分支：
+
+```bash
+gh workflow run verify-dsh-startup.yml --ref develop
+```
+
+工作流会构建 Windows x64 普通版和内置版、Intel macOS 普通版，在干净的 runner 上安装并启动客户端。通过后可从运行摘要或 **Artifacts** 下载客户端截图。工作流合入默认分支后，也可以在 GitHub Actions 页面点 **Run workflow** 选择分支运行。
+
 ### 打包发布
 
 发布通过 GitHub Releases 进行，流程：
@@ -231,8 +241,9 @@ pnpm two              # 一次出两个版本：普通版（plain）+ 捆绑版�
    git push origin v0.0.2
    ```
 
-5. 推送后 `.github/workflows/release.yml` 会在 macOS runner 上自动执行构建，
-   并把生成的 `.dmg`、`.app` 等产物上传到该 tag 对应的 Release。
+5. 推送后，**Release** 会构建四个平台的普通版和内置版，上传安装包和 macOS ZIP 为 Actions 产物，再用同一批文件校验完整性和冷启动。全部通过后，统一上传附件并公开 Release。
+
+发版前可用 `gh workflow run release.yml --ref develop` 运行同样的构建和验证。手动运行的安装包可在该次运行的 **Artifacts** 下载。
 
 使用者始终从 [Releases](../../releases/latest) 页面下载最新版本。
 

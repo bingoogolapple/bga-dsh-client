@@ -289,23 +289,13 @@ pub fn probe_versions(app: &AppHandle) -> VersionInfo {
         None => (None, None, None),
     };
 
-    // 系统探测：拼入 nvm/pnpm home 等路径（Dock 启动时默认 PATH 极短）
+    // 系统探测与服务启动使用相同的 PATH 顺序。
     #[cfg(not(windows))]
-    let sys_path = {
-        let mut dirs = crate::service::path_dirs();
-        dirs.reverse(); // nvm 等高优先路径排前面
-        let extra = dirs
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(":");
-        let existing = std::env::var("PATH").unwrap_or_default();
-        if extra.is_empty() {
-            existing
-        } else {
-            format!("{extra}:{existing}")
-        }
-    };
+    let sys_path = crate::service::path_dirs()
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(":");
 
     // 六个探测并行跑（<1s 返回），互不阻塞
     let (r_node, r_pnpm, r_dsh, s_node, s_pnpm, s_dsh) = std::thread::scope(|s| {

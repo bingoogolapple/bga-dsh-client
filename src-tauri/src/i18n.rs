@@ -198,6 +198,11 @@ pub fn msg(locale: Locale, key: &str) -> &str {
         (_, "svc.orphan_reuse") => if_en(locale, "Taking over the service left from last exit (PID {0}), reusing it directly", "接管上次退出时保留的服务（PID {0}），直接复用"),
         (_, "svc.external_running") => if_en(locale, "A verifiable external DSH is already running on 127.0.0.1:3080; it can be managed by this app", "检测到可识别的外部 DSH 正运行于 127.0.0.1:3080，本应用可以管理它"),
         (_, "svc.starting") => if_en(locale, "Starting service…", "正在启动服务…"),
+        (_, "svc.starting_npx") => if_en(
+            locale,
+            "Starting dsh via npm. The first launch or an update may take a few minutes…",
+            "正在通过 npm 启动 dsh，首次启动或更新可能需要几分钟…",
+        ),
         (_, "svc.invalid_version") => if_en(locale, "Selected dsh version is invalid: {0}", "选定的 dsh 版本无效：{0}"),
         (_, "svc.version_unavailable") => if_en(locale, "Selected dsh version is not installed: {0}", "选定的 dsh 版本尚未安装：{0}"),
         (_, "svc.spawn_failed") => if_en(locale, "Failed to spawn process: {0}", "启动进程失败：{0}"),

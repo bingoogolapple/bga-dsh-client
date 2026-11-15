@@ -1,0 +1,175 @@
+name: Installer cold start
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            artifact: installers-windows-x64
+            extension: exe
+            mode: two
+            variants: plain bundled
+          - runner: macos-26-intel
+            artifact: installers-macos-intel
+            extension: dmg
+            mode: plain
+            variants: plain
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Build installers
+        shell: bash
+        env:
+          BUILD_MODE: ${{ matrix.mode }}
+          EXTENSION: ${{ matrix.extension }}
+          VARIANTS: ${{ matrix.variants }}
+          TAURI_BUILD_VERBOSE: ${{ runner.os == 'macOS' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          app_version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+          node_version=$(sed -nE "s/^const NODE_VER = '([^']+)'$/\1/p" scripts/bundle-runtime.mjs)
+          bundled_dsh_version=$(sed -nE "s/^const DSH_VERSION = '([^']+)'$/\1/p" scripts/bundle-runtime.mjs)
+          test -n "$app_version" && test -n "$node_version" && test -n "$bundled_dsh_version"
+          test "$app_version" = "$(node -p 'require("./package.json").version')"
+          pnpm install --frozen-lockfile
+          ./scripts/build-release.sh "$BUILD_MODE"
+          mkdir -p installers
+          printf 'app=%s\nnode=%s\nbundled_dsh=%s\n' "$app_version" "$node_version" "$bundled_dsh_version" > installers/versions.env
+          shopt -s nullglob
+          for variant in $VARIANTS; do
+            files=("dist/release/$variant/"*."$EXTENSION")
+            test "${#files[@]}" -eq 1
+            test -s "${files[0]}"
+            mkdir -p "installers/$variant"
+            cp "${files[0]}" "installers/$variant/"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: installers
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 / ${{ matrix.variant }}
+    needs: package
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [plain, bundled]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: installers-windows-x64
+          path: installers
+      - name: Read installer versions
+        id: versions
+        shell: bash
+        run: cat installers/versions.env >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v7
+        if: matrix.variant == 'plain'
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          package-manager-cache: false
+      - name: Verify cold start and capture the client window
+        shell: pwsh
+        env:
+          VARIANT: ${{ matrix.variant }}
+          APP_VERSION: ${{ steps.versions.outputs.app }}
+          NODE_VERSION: ${{ steps.versions.outputs.node }}
+          BUNDLED_DSH_VERSION: ${{ steps.versions.outputs.bundled_dsh }}
+        run: |
+          $files = @(Get-ChildItem -LiteralPath "installers/$env:VARIANT" -Filter '*.exe' -File)
+          if ($files.Count -ne 1) { throw 'Expected one NSIS installer' }
+          & ./scripts/smoke-windows-installer.ps1 -Installer $files[0].FullName -Variant $env:VARIANT `
+            -AppVersion $env:APP_VERSION -BundledDshVersion $env:BUNDLED_DSH_VERSION `
+            -NodeVersion $env:NODE_VERSION -ScreenshotPath "screenshots/windows-x64-$env:VARIANT.png"
+      - uses: actions/upload-artifact@v7
+        id: screenshot
+        with:
+          name: screenshot-windows-x64-${{ matrix.variant }}
+          path: screenshots/windows-x64-${{ matrix.variant }}.png
+          retention-days: 14
+          if-no-files-found: error
+      - name: Link to screenshot
+        shell: bash
+        env:
+          SCREENSHOT_URL: ${{ steps.screenshot.outputs.artifact-url }}
+        run: printf '[Download client screenshot](%s)\n' "$SCREENSHOT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  intel:
+    name: Intel macOS / plain
+    needs: package
+    if: ${{ !cancelled() }}
+    runs-on: macos-26-intel
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: installers-macos-intel
+          path: installers
+      - name: Read installer versions
+        id: versions
+        run: cat installers/versions.env >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          package-manager-cache: false
+      - name: Verify cold start and capture the client window
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.versions.outputs.app }}
+          NODE_VERSION: ${{ steps.versions.outputs.node }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=("$PWD/installers/plain/"*.dmg)
+          test "${#dmgs[@]}" -eq 1
+          bash scripts/smoke-macos-installer.sh "${dmgs[0]}" "$APP_VERSION" "$GITHUB_WORKSPACE/screenshots/macos-intel-plain.png"
+      - uses: actions/upload-artifact@v7
+        id: screenshot
+        with:
+          name: screenshot-macos-intel-plain
+          path: screenshots/macos-intel-plain.png
+          retention-days: 14
+          if-no-files-found: error
+      - name: Link to screenshot
+        env:
+          SCREENSHOT_URL: ${{ steps.screenshot.outputs.artifact-url }}
+        run: printf '[Download client screenshot](%s)\n' "$SCREENSHOT_URL" >> "$GITHUB_STEP_SUMMARY"
