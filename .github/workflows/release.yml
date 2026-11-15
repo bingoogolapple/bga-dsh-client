@@ -21,7 +21,7 @@ permissions:
 jobs:
   prepare:
     name: 校验发布版本
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       app_version: ${{ steps.versions.outputs.app_version }}
@@ -77,14 +77,14 @@ jobs:
       macos_intel: ${{ steps.artifact.outputs.macos_intel }}
       linux: ${{ steps.artifact.outputs.linux }}
       windows: ${{ steps.artifact.outputs.windows }}
-    # 平台矩阵：macos-26 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
-    # ubuntu-26.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
+    # 平台矩阵：xcode-27 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
+    # ubuntu-26.04 为 Linux（x64，产出 deb），windows-2025 为 Win x64（产出 NSIS exe）。
     # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-26
+          - platform: xcode-27
             key: macos_arm
             arch: aarch64
           - platform: macos-26-intel
@@ -93,7 +93,7 @@ jobs:
           - platform: ubuntu-26.04
             key: linux
             arch: x86_64
-          - platform: windows-latest
+          - platform: windows-2025
             key: windows
             arch: x86_64
     runs-on: ${{ matrix.platform }}
@@ -248,7 +248,7 @@ jobs:
   integrity:
     name: 校验四平台产物完整性
     needs: [prepare, build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
       artifact_ids: ${{ steps.ids.outputs.all }}
@@ -297,6 +297,7 @@ jobs:
           - { platform: linux, variant: plain-2 }
           - { platform: linux, variant: plain-3 }
         include:
+          # 用 macOS 26 和 Ubuntu 24.04 验证新镜像构建的安装包能在上一代系统运行。
           - platform: macos_arm
             runner: macos-26
             arch: aarch64
@@ -308,7 +309,7 @@ jobs:
           - platform: linux
             runner: ubuntu-24.04
           - platform: windows
-            runner: windows-latest
+            runner: windows-2025
     env:
       APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       NODE_VERSION: ${{ needs.prepare.outputs.node_ver }}
@@ -361,7 +362,7 @@ jobs:
     name: 统一发布 GitHub Release
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [prepare, integrity, smoke]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: write
