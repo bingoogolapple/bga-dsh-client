@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      repeat_windows_plain:
+        description: 在三个独立 Windows runner 上验证同一个普通版安装包
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -292,7 +297,14 @@ jobs:
       fail-fast: false
       matrix:
         platform: [macos_arm, macos_intel, linux, windows]
-        variant: [plain, bundled]
+        variant: ${{ fromJSON(inputs.repeat_windows_plain && '["plain", "bundled", "plain-2", "plain-3"]' || '["plain", "bundled"]') }}
+        exclude:
+          - { platform: macos_arm, variant: plain-2 }
+          - { platform: macos_arm, variant: plain-3 }
+          - { platform: macos_intel, variant: plain-2 }
+          - { platform: macos_intel, variant: plain-3 }
+          - { platform: linux, variant: plain-2 }
+          - { platform: linux, variant: plain-3 }
         include:
           - platform: macos_arm
             runner: macos-26
@@ -310,7 +322,7 @@ jobs:
       APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       NODE_VERSION: ${{ needs.prepare.outputs.node_ver }}
       BUNDLED_DSH_VERSION: ${{ needs.prepare.outputs.dsh_version }}
-      VARIANT: ${{ matrix.variant }}
+      VARIANT: ${{ startsWith(matrix.variant, 'plain') && 'plain' || 'bundled' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -321,7 +333,7 @@ jobs:
           path: release-files
           digest-mismatch: error
       - uses: actions/setup-node@v7
-        if: matrix.variant == 'plain'
+        if: env.VARIANT == 'plain'
         with:
           node-version: ${{ needs.prepare.outputs.node_ver }}
           package-manager-cache: false

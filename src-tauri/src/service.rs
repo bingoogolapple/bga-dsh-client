@@ -1401,20 +1401,25 @@ fn build_command(
 ) -> StartCommand {
     #[cfg(windows)]
     {
+        if let (LaunchMethod::Builtin, Some((node, bin_js))) =
+            (method, runtime.and_then(runtime_entry))
+        {
+            return StartCommand::node(&node, &bin_js);
+        }
+        // 普通版和内置 runtime 缺失时都走 npx。
         // Windows 走 cmd：用 set 语法注入 npm 缓存目录（值含分隔符与可能的空格，带引号）
         let npm_prefix = match npm_cache {
             Some(p) => format!("set \"npm_config_cache={}\" && ", p.display()),
             None => String::new(),
         };
-        let npx_dsh = format!("{npm_prefix}{NPX_DSH_COMMAND}");
-        match method {
-            LaunchMethod::Npx => StartCommand::shell(npx_dsh, true),
-            LaunchMethod::Builtin => match runtime.and_then(runtime_entry) {
-                Some((node, bin_js)) => StartCommand::node(&node, &bin_js),
-                // 内置版打包缺失运行时（异常）：回退 npx，让日志暴露原因。
-                None => StartCommand::shell(npx_dsh, true),
-            },
-        }
+        let mut launch = StartCommand::shell(format!("{npm_prefix}{NPX_DSH_COMMAND}"), true);
+        // dsh 首次安装会并发下载数百个依赖。提高 npm 默认的 15 个连接上限，
+        // 并避免在启动 Web 服务前等待 npm 的在线审计。
+        launch.process.envs([
+            ("npm_config_maxsockets", "48"),
+            ("npm_config_audit", "false"),
+        ]);
+        launch
     }
     #[cfg(not(windows))]
     {
@@ -1728,6 +1733,18 @@ mod tests {
         assert!(cmd.contains("npm_config_cache"));
         assert!(cmd.contains("/tmp/npm-cache"));
         assert!(launch.uses_npx);
+        #[cfg(windows)]
+        {
+            let env: std::collections::HashMap<_, _> = launch.process.get_envs().collect();
+            assert_eq!(
+                env[std::ffi::OsStr::new("npm_config_maxsockets")],
+                Some(std::ffi::OsStr::new("48"))
+            );
+            assert_eq!(
+                env[std::ffi::OsStr::new("npm_config_audit")],
+                Some(std::ffi::OsStr::new("false"))
+            );
+        }
     }
 
     /// 内置版（Builtin）+ runtime 存在：直接使用捆绑 node 直跑 dsh，而非 npx。
