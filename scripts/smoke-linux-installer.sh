@@ -27,8 +27,13 @@ if [[ "${1:-}" != --in-display ]]; then
   sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
   sudo apt-get -o Acquire::Retries=3 install -y "$deb" xvfb xauth dbus-x11 x11-utils openbox wmctrl
   dpkg-query -W -f='${Status} ${Version}\n' "$package" | grep -Fx "install ok installed $app_version"
-  exec xvfb-run -a --server-args='-screen 0 1920x1200x24' \
-    dbus-run-session -- bash "$(realpath -e "$0")" --in-display "$variant" "$app_version" "$4" "$5"
+  probe_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/dsh-linux.XXXXXXXX")"
+  # Session helpers can write to the XDG directories until Xvfb and D-Bus exit.
+  # Keep the smoke test's exit status if the runner must finish removing scratch files.
+  trap 'rm -rf -- "$probe_dir" || echo "Unable to fully remove $probe_dir" >&2' EXIT
+  xvfb-run -a --server-args='-screen 0 1920x1200x24' \
+    dbus-run-session -- bash "$(realpath -e "$0")" --in-display "$variant" "$app_version" "$4" "$5" "$probe_dir"
+  exit
 fi
 
 variant="$2"
@@ -49,7 +54,7 @@ else
 fi
 test "$("$expected_node" --version)" = "$node_version"
 
-probe_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/dsh-linux.XXXXXXXX")"
+probe_dir="$6"
 export XDG_CONFIG_HOME="$probe_dir/config"
 export XDG_CACHE_HOME="$probe_dir/cache"
 export XDG_DATA_HOME="$probe_dir/data"
@@ -81,7 +86,6 @@ cleanup() {
   if [[ -n "${wm_pid:-}" ]]; then
     kill "$wm_pid" 2>/dev/null || true
   fi
-  rm -rf -- "$probe_dir"
   exit "$result"
 }
 trap cleanup EXIT
