@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-latest
+          - runner: windows-2025
             artifact: installers-windows-x64
             extension: exe
             mode: two
@@ -26,23 +26,22 @@ jobs:
             mode: plain
             variants: plain
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.97'
+          toolchain: '1.100.0'
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 9
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: '26'
+      - uses: pnpm/setup@v3.2.0
+        with:
+          cache: true
+          install: false
       - name: Build installers
         shell: bash
         env:
@@ -81,14 +80,14 @@ jobs:
     name: Windows x64 / ${{ matrix.variant }}
     needs: package
     if: ${{ !cancelled() }}
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         variant: [plain, bundled]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
@@ -137,7 +136,7 @@ jobs:
     runs-on: macos-26-intel
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8

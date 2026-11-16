@@ -21,7 +21,7 @@ permissions:
 jobs:
   prepare:
     name: 校验发布版本
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       app_version: ${{ steps.versions.outputs.app_version }}
@@ -29,7 +29,7 @@ jobs:
       dsh_version: ${{ steps.versions.outputs.dsh_version }}
       pnpm_version: ${{ steps.versions.outputs.pnpm_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: 读取 App 和运行时版本
@@ -77,14 +77,14 @@ jobs:
       macos_intel: ${{ steps.artifact.outputs.macos_intel }}
       linux: ${{ steps.artifact.outputs.linux }}
       windows: ${{ steps.artifact.outputs.windows }}
-    # 平台矩阵：macos-26 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
-    # ubuntu-26.04 为 Linux（x64，产出 deb），windows-latest 为 Win x64（产出 NSIS exe）。
+    # 平台矩阵：xcode-27 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
+    # ubuntu-26.04 为 Linux（x64，产出 deb），windows-2025 为 Win x64（产出 NSIS exe）。
     # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-26
+          - platform: xcode-27
             key: macos_arm
             arch: aarch64
           - platform: macos-26-intel
@@ -93,13 +93,13 @@ jobs:
           - platform: ubuntu-26.04
             key: linux
             arch: x86_64
-          - platform: windows-latest
+          - platform: windows-2025
             key: windows
             arch: x86_64
     runs-on: ${{ matrix.platform }}
     steps:
       - name: 检出源码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -117,11 +117,8 @@ jobs:
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 必须显式指定与仓库根目录 rust-toolchain.toml 相同的 channel（1.97），
-          # 否则 dtolnay 会把组件装到默认 stable，而 rust-toolchain.toml 会把
-          # 实际生效 toolchain 覆盖为 1.97，导致 `cargo fmt --check` 仍然报
-          # "'cargo-fmt' is not installed"。
-          toolchain: 1.97
+          # 与根目录 rust-toolchain.toml 同步，确保组件装入 cargo 实际使用的工具链。
+          toolchain: '1.100.0'
           components: rustfmt, clippy
 
       - name: 缓存 Cargo 构建产物
@@ -129,23 +126,17 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: 安装 pnpm
-        # Node24 runtime 版本；version: 9 为 CI 构建工具版本，与
-        # pnpm-lock.yaml 的 lockfileVersion 匹配（非内置运行时版本）。
-        uses: pnpm/action-setup@v6
-        with:
-          version: 9
-
       - name: 安装 Node.js
-        # Node24 runtime 版本；node-version: 22 为 CI 构建环境版本
-        # （LTS，与内置运行时版本相互独立）。
-        # 本项目 package.json 无 packageManager 字段，自动缓存检测不会触发，
-        # 故显式声明 cache: pnpm 与 lockfile 路径。
         uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: '26'
+
+      - name: 安装 pnpm
+        # 从根目录 package.json 读取构建工具版本，并按 pnpm-lock.yaml 缓存 store。
+        uses: pnpm/setup@v3.2.0
+        with:
+          cache: true
+          install: false
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -257,12 +248,12 @@ jobs:
   integrity:
     name: 校验四平台产物完整性
     needs: [prepare, build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
       artifact_ids: ${{ steps.ids.outputs.all }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: 检查产物 ID
@@ -306,6 +297,7 @@ jobs:
           - { platform: linux, variant: plain-2 }
           - { platform: linux, variant: plain-3 }
         include:
+          # 用 macOS 26 和 Ubuntu 24.04 验证新镜像构建的安装包能在上一代系统运行。
           - platform: macos_arm
             runner: macos-26
             arch: aarch64
@@ -317,14 +309,14 @@ jobs:
           - platform: linux
             runner: ubuntu-24.04
           - platform: windows
-            runner: windows-latest
+            runner: windows-2025
     env:
       APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       NODE_VERSION: ${{ needs.prepare.outputs.node_ver }}
       BUNDLED_DSH_VERSION: ${{ needs.prepare.outputs.dsh_version }}
       VARIANT: ${{ startsWith(matrix.variant, 'plain') && 'plain' || 'bundled' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
@@ -370,12 +362,12 @@ jobs:
     name: 统一发布 GitHub Release
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [prepare, integrity, smoke]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8

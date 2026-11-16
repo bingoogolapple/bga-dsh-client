@@ -56,12 +56,10 @@ pub(crate) fn qr_rgba(url: &str) -> Option<(u32, u32, Vec<u8>)> {
         }
     }
     // 白色背景：先填白再画深色块更简单，这里直接把未写入的像素补成白色
-    for chunk in buf.chunks_exact_mut(4) {
-        if chunk[3] == 0 {
-            chunk[0] = 0xff;
-            chunk[1] = 0xff;
-            chunk[2] = 0xff;
-            chunk[3] = 0xff;
+    let (pixels, _) = buf.as_chunks_mut::<4>();
+    for pixel in pixels {
+        if pixel[3] == 0 {
+            *pixel = [0xff; 4];
         }
     }
     Some((size, size, buf))
@@ -111,14 +109,15 @@ mod tests {
             (w * h * 4) as usize,
             "buffer 长度应为 w*h*4 (RGBA)"
         );
+        let (pixels, _) = buf.as_chunks::<4>();
         // 全部像素不透明
         assert!(
-            buf.chunks_exact(4).all(|c| c[3] == 0xff),
+            pixels.iter().all(|pixel| pixel[3] == 0xff),
             "所有像素应为不透明"
         );
         // 应同时存在深色与浅色像素（真有图案，不是纯色块）
-        let dark = buf.chunks_exact(4).filter(|c| c[0] == 0x1f).count();
-        let light = buf.chunks_exact(4).filter(|c| c[0] == 0xff).count();
+        let dark = pixels.iter().filter(|pixel| pixel[0] == 0x1f).count();
+        let light = pixels.iter().filter(|pixel| pixel[0] == 0xff).count();
         assert!(dark > 0 && light > 0, "位图应含深浅两种像素");
     }
 }

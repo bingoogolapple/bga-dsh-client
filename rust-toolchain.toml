@@ -3,4 +3,4 @@
 # 注意：dtolnay/rust-toolchain 不会自动读取本文件，必须在 workflow 显式指定相同 channel。
 # 与开发机当前版本对齐；升级时先在此处确认再全局生效。
 [toolchain]
-channel = "1.97"
+channel = "1.100.0"

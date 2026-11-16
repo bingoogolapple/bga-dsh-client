@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -27,18 +27,17 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97
+          toolchain: '1.100.0'
           components: rustfmt, clippy
-      - name: Install pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 9
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: '26'
+      - name: Install pnpm
+        uses: pnpm/setup@v3.2.0
+        with:
+          cache: true
+          install: false
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Rust format check
@@ -63,22 +62,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-26
+          - os: xcode-27
             target: aarch64-apple-darwin
           - os: macos-26-intel
             target: x86_64-apple-darwin
           - os: ubuntu-26.04
             target: x86_64-unknown-linux-gnu
-          - os: windows-latest
+          - os: windows-2025
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97
+          toolchain: '1.100.0'
           targets: ${{ matrix.target }}
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
