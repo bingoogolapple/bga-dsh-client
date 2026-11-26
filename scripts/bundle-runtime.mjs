@@ -11,7 +11,7 @@ import { Readable } from 'node:stream'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // 内置运行时版本：全仓唯一定义点（build-release.sh 与 CI 按行提取）。
 // 升版本请用 ./scripts/set-runtime-version.sh。
-const NODE_VER = 'v24.20.0'
+const NODE_VER = 'v26.13.1'
 const DSH_VERSION = '0.2.2-rc.3'
 const PNPM_VERSION = '11.25.0'
 

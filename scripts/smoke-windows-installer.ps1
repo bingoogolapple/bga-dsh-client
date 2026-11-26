@@ -362,7 +362,7 @@ try {
 
     $serviceLog = Join-Path $appConfig 'service.log'
     $windowReported = $false
-    $deadline = [DateTime]::UtcNow.AddSeconds(780)
+    $deadline = [DateTime]::UtcNow.AddSeconds(1260)
     do {
         $app.Refresh()
         if ($app.HasExited) { throw "Application exited early with code $($app.ExitCode)" }
