@@ -27,7 +27,15 @@ const START_TIMEOUT: Duration = Duration::from_secs(180);
 fn startup_timeout(uses_npx: bool) -> Duration {
     if uses_npx {
         // npx 在缓存未命中时，先下载并安装依赖，再启动 Web 服务。
-        crate::dsh::DOWNLOAD_TIMEOUT + START_TIMEOUT
+        #[cfg(windows)]
+        {
+            // Windows 冷缓存安装数百个依赖可能超过 12 分钟，给下载与启动共 20 分钟。
+            Duration::from_secs(1200)
+        }
+        #[cfg(not(windows))]
+        {
+            crate::dsh::DOWNLOAD_TIMEOUT + START_TIMEOUT
+        }
     } else {
         START_TIMEOUT
     }
@@ -1718,6 +1726,9 @@ mod tests {
 
     #[test]
     fn startup_timeout_accounts_for_cold_npx_install() {
+        #[cfg(windows)]
+        assert_eq!(startup_timeout(true), Duration::from_secs(1200));
+        #[cfg(not(windows))]
         assert_eq!(startup_timeout(true), Duration::from_secs(720));
         assert_eq!(startup_timeout(false), Duration::from_secs(180));
     }
