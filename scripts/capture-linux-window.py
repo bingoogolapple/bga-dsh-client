@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -99,6 +100,55 @@ def is_toolbar_control(node, bounds):
             and rect.y >= bounds["y"] and rect.y + rect.height <= bounds["y"] + 40)
 
 
+def document_diagnostics(pid):
+    """Only document roles, allowlisted titles and geometry; never page text."""
+    Atspi.init()
+    if hasattr(Atspi, "set_timeout"):
+        Atspi.set_timeout(500, 1000)
+    context = GLib.MainContext.default()
+    while context.pending():
+        context.iteration(False)
+    desktop = Atspi.get_desktop(0)
+    queue = deque()
+    for index in range(desktop.get_child_count()):
+        app = desktop.get_child_at_index(index)
+        if app is not None and app.get_process_id() == pid:
+            queue.append(app)
+    documents = []
+    document_roles = {
+        getattr(Atspi.Role, name, None)
+        for name in ("DOCUMENT_WEB", "DOCUMENT_FRAME", "DOCUMENT_TEXT")
+    }
+    deadline = time.monotonic() + 8
+    visited = 0
+    while queue and visited < 2000 and time.monotonic() < deadline:
+        node = queue.popleft()
+        visited += 1
+        try:
+            role = node.get_role()
+            if role in document_roles:
+                title = node.get_name() or ""
+                states = node.get_state_set()
+                row = {
+                    "role": node.get_role_name(),
+                    "title": title if title in ("DeepSeekHarness", "DeepSeek Harness") else "<other or empty>",
+                    "visible": states.contains(Atspi.StateType.VISIBLE),
+                    "showing": states.contains(Atspi.StateType.SHOWING),
+                }
+                component = node.get_component_iface()
+                if component is not None:
+                    rect = component.get_extents(Atspi.CoordType.SCREEN)
+                    row["bounds"] = {name: getattr(rect, name) for name in ("x", "y", "width", "height")}
+                documents.append(row)
+            for index in range(node.get_child_count()):
+                child = node.get_child_at_index(index)
+                if child is not None:
+                    queue.append(child)
+        except GLib.Error:
+            continue
+    return {"documents": documents, "accessible_nodes_visited": visited}
+
+
 def refresh_client(pid, window):
     Atspi.init()
     if hasattr(Atspi, "set_timeout"):
@@ -155,11 +205,22 @@ def main():
         raise RuntimeError("Capture window does not belong to the test app")
     subprocess.run(["wmctrl", "-ir", args.window, "-e", "0,0,0,1600,1000"], check=True)
     subprocess.run(["wmctrl", "-ia", args.window], check=True)
-    before = wait_for_interface(args.pid, args.window, args.screenshot)
-    refresh_client(args.pid, args.window)
-    # Give the real toolbar navigation time to replace the previous document.
-    time.sleep(2)
-    after = wait_for_interface(args.pid, args.window, args.screenshot)
+    try:
+        before = wait_for_interface(args.pid, args.window, args.screenshot)
+        refresh_client(args.pid, args.window)
+        # Give the real toolbar navigation time to replace the previous document.
+        time.sleep(2)
+        after = wait_for_interface(args.pid, args.window, args.screenshot)
+    except Exception:
+        try:
+            diagnostics = document_diagnostics(args.pid)
+            diagnostics["window_bounds"] = geometry(args.window)
+        except Exception as error:
+            diagnostics = {"diagnostic_error_type": type(error).__name__}
+        debug_path = args.screenshot.with_suffix(".page-debug.json")
+        debug_path.write_text(json.dumps(diagnostics, indent=2) + "\n")
+        print("Linux page diagnostics: " + json.dumps(diagnostics), file=sys.stderr, flush=True)
+        raise
     print(json.dumps({"rendered_dsh_before_refresh": before, "rendered_dsh_after_refresh": after,
                       "toolbar_refresh": "AT-SPI action passed", "screenshot": str(args.screenshot)}), flush=True)
 

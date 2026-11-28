@@ -11,9 +11,19 @@ on:
         description: Also build and verify both Intel macOS packages
         type: boolean
         default: false
+      platforms:
+        description: Platforms to verify
+        type: choice
+        options: [windows-linux, windows, linux]
+        default: windows-linux
+      source_run_id:
+        description: Reuse immutable installers from this workflow run (empty builds current source)
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   plan:
@@ -27,13 +37,22 @@ jobs:
         env:
           INCLUDE_MACOS: ${{ inputs.include_macos }}
           DSH_VERSION: ${{ inputs.dsh_version }}
+          PLATFORMS: ${{ inputs.platforms }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
         run: |
           python3 - <<'PY_MATRIX'
           import json, os
+          source_run = os.environ["SOURCE_RUN_ID"]
+          if source_run and not source_run.isdecimal():
+              raise SystemExit("source_run_id must be a numeric workflow run ID")
           packages = [
               dict(runner="windows-2025", artifact="installers-windows-x64", extension="exe"),
               dict(runner="ubuntu-26.04", artifact="installers-linux-x64", extension="deb"),
           ]
+          if os.environ["PLATFORMS"] == "windows":
+              packages = [package for package in packages if package["runner"].startswith("windows")]
+          elif os.environ["PLATFORMS"] == "linux":
+              packages = [package for package in packages if package["runner"].startswith("ubuntu")]
           if os.environ["INCLUDE_MACOS"] == "true":
               packages.append(dict(runner="macos-26-intel", artifact="installers-macos-intel", extension="dmg"))
           modes = ["default", "regression"] if os.environ["DSH_VERSION"] else ["default"]
@@ -41,10 +60,20 @@ jobs:
               print("packages=" + json.dumps(packages), file=output)
               print("dsh_modes=" + json.dumps(modes), file=output)
           PY_MATRIX
+      - name: Record reused installer provenance
+        if: inputs.source_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          sha=$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN_ID" --jq '.head_sha')
+          printf 'Installer binaries: [run %s](https://github.com/%s/actions/runs/%s), source commit `%s`.\n' "$SOURCE_RUN_ID" "$GH_REPO" "$SOURCE_RUN_ID" "$sha" >> "$GITHUB_STEP_SUMMARY"
 
   package:
     name: Package / ${{ matrix.runner }}
     needs: plan
+    if: inputs.source_run_id == ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -136,7 +165,7 @@ jobs:
   windows:
     name: Windows x64 / ${{ matrix.variant }} / ${{ matrix.dsh_mode }}
     needs: [plan, package]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.platforms != 'linux' }}
     runs-on: windows-2025
     timeout-minutes: 45
     strategy:
@@ -151,6 +180,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: installers-windows-x64
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id || github.run_id }}
           path: installers
           digest-mismatch: error
       - name: Read installer versions
@@ -188,7 +219,7 @@ jobs:
   linux:
     name: Linux x64 / ${{ matrix.variant }} / ${{ matrix.dsh_mode }}
     needs: [plan, package]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.platforms != 'windows' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -203,6 +234,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: installers-linux-x64
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id || github.run_id }}
           path: installers
           digest-mismatch: error
       - name: Read installer versions
@@ -252,6 +285,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: installers-macos-intel
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id || github.run_id }}
           path: installers
           digest-mismatch: error
       - name: Read installer versions
