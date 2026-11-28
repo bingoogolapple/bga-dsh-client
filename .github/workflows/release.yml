@@ -35,6 +35,7 @@ jobs:
       macos_intel: ${{ steps.reuse.outputs.macos_intel }}
       linux: ${{ steps.reuse.outputs.linux }}
       windows: ${{ steps.reuse.outputs.windows }}
+      build_matrix: ${{ steps.reuse.outputs.build_matrix }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -70,7 +71,7 @@ jobs:
                       raise SystemExit(f"Missing {key} in bundle-runtime.mjs")
                   print(f"{key.lower()}={match[1]}", file=output)
           print(f"Application version: {version}")
-      - name: Verify the tag and the three reusable build artifacts
+      - name: Verify the tag and select reusable build artifacts
         id: reuse
         shell: python
         env:
@@ -96,11 +97,17 @@ jobs:
           run = api(f"actions/runs/{run_id}")
           if (run["event"], run["head_branch"], run["head_sha"], run["path"].split("@", 1)[0]) != ("push", tag, sha, ".github/workflows/release.yml"):
               raise SystemExit("The source run does not belong to this tag and Release workflow")
-          if run["status"] != "completed" or run["conclusion"] != "failure":
+          if run["status"] != "completed" or run["conclusion"] not in ("failure", "timed_out"):
               raise SystemExit("The original Release must have ended with an unsuccessful build")
 
           artifacts = api(f"actions/runs/{run_id}/artifacts?per_page=100")["artifacts"]
           completed_jobs = {}
+          builds = [{"platform": "xcode-27", "key": "macos_arm", "arch": "aarch64"}]
+          release_checks = {
+              "检出源码", "运行 Rust 单元测试", "依赖安全审计（cargo audit）", "代码风格与静态检查",
+              "前端代码检查（ESLint）", "前端格式检查（Prettier）", "构建双版本（plain + bundled）",
+              "整理安装包和 macOS ZIP", "上传安装包",
+          }
           with (open(os.environ["GITHUB_OUTPUT"], "a") as outputs,
                 open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary):
               print(f"Release source: `{sha}` from `{tag}`. Reused [official run {run_id}](https://github.com/{repo}/actions/runs/{run_id}).", file=summary)
@@ -116,33 +123,35 @@ jobs:
                       attempt = int(match[1])
                       if attempt not in completed_jobs:
                           completed_jobs[attempt] = api(f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")["jobs"]
-                      if any(job["name"] == f"构建 / {runner}" and job["conclusion"] == "success"
-                             and any(step["name"] == "上传安装包" and step["conclusion"] == "success" for step in job["steps"])
+                      if any(job["name"] == f"构建 / {runner}" and job["status"] == "completed"
+                             and release_checks <= {step["name"] for step in job["steps"] if step["conclusion"] == "success"}
                              for job in completed_jobs[attempt]):
                           valid.append((attempt, artifact["id"]))
                   if not valid:
+                      if platform == "macos_intel":
+                          builds.append({"platform": runner, "key": platform, "arch": "x86_64"})
+                          print(f"- {runner}: rebuild from the same release tag", file=summary)
+                          continue
                       raise SystemExit(f"No completed build artifact for {runner}")
                   _, artifact_id = max(valid)
                   print(f"{platform}={artifact_id}", file=outputs)
                   print(f"Reusing official {runner} artifact {artifact_id}")
                   print(f"- {runner}: artifact {artifact_id}", file=summary)
+              print("build_matrix=" + json.dumps({"include": builds}), file=outputs)
 
   build:
     name: 构建 / ${{ matrix.platform }}
     needs: prepare
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: read
       checks: write
     outputs:
       macos_arm: ${{ steps.artifact.outputs.macos_arm }}
+      macos_intel: ${{ steps.artifact.outputs.macos_intel }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: xcode-27
-            key: macos_arm
-            arch: aarch64
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
     runs-on: ${{ matrix.platform }}
     steps:
       - name: 检出源码
@@ -291,6 +300,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       official_artifact_ids: ${{ steps.ids.outputs.official }}
+      recovery_artifact_ids: ${{ steps.ids.outputs.recovery }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -301,17 +311,25 @@ jobs:
         shell: bash
         env:
           MAC_ARM: ${{ needs.build.outputs.macos_arm }}
-          MAC_INTEL: ${{ needs.prepare.outputs.macos_intel }}
+          MAC_INTEL_OFFICIAL: ${{ needs.prepare.outputs.macos_intel }}
+          MAC_INTEL_RECOVERY: ${{ needs.build.outputs.macos_intel }}
           LINUX: ${{ needs.prepare.outputs.linux }}
           WINDOWS: ${{ needs.prepare.outputs.windows }}
         run: |
-          ids="$MAC_ARM,$MAC_INTEL,$LINUX,$WINDOWS"
-          [[ "$ids" =~ ^[0-9]+,[0-9]+,[0-9]+,[0-9]+$ ]]
-          printf 'official=%s\n' "$MAC_INTEL,$LINUX,$WINDOWS" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          test -z "$MAC_INTEL_OFFICIAL" || test -z "$MAC_INTEL_RECOVERY"
+          mac_intel="${MAC_INTEL_OFFICIAL:-$MAC_INTEL_RECOVERY}"
+          for artifact_id in "$MAC_ARM" "$mac_intel" "$LINUX" "$WINDOWS"; do
+            case "$artifact_id" in ''|*[!0-9]*) echo 'Missing or invalid release artifact ID' >&2; exit 1 ;; esac
+          done
+          test "$(printf '%s\n' "$MAC_ARM" "$mac_intel" "$LINUX" "$WINDOWS" | sort -u | wc -l)" -eq 4
+          printf 'official=%s\n' "$LINUX,$WINDOWS${MAC_INTEL_OFFICIAL:+,$MAC_INTEL_OFFICIAL}" >> "$GITHUB_OUTPUT"
+          printf 'recovery=%s\n' "$MAC_ARM${MAC_INTEL_RECOVERY:+,$MAC_INTEL_RECOVERY}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.macos_arm }}
+          artifact-ids: ${{ steps.ids.outputs.recovery }}
           path: release-files
+          merge-multiple: true
           digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
@@ -370,8 +388,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
-          run-id: ${{ matrix.platform == 'macos_arm' && github.run_id || env.OFFICIAL_RUN_ID }}
-          artifact-ids: ${{ matrix.platform == 'macos_arm' && needs.build.outputs.macos_arm || needs.prepare.outputs[matrix.platform] }}
+          run-id: ${{ needs.build.outputs[matrix.platform] && github.run_id || env.OFFICIAL_RUN_ID }}
+          artifact-ids: ${{ needs.build.outputs[matrix.platform] || needs.prepare.outputs[matrix.platform] }}
           path: release-files
           digest-mismatch: error
       - uses: actions/setup-node@v7
@@ -431,8 +449,9 @@ jobs:
           ref: ${{ env.RELEASE_SOURCE_SHA }}
       - uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.macos_arm }}
+          artifact-ids: ${{ needs.integrity.outputs.recovery_artifact_ids }}
           path: release-files
+          merge-multiple: true
           digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
