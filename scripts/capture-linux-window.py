@@ -1,0 +1,168 @@
+"""Verify the real Linux client before and after a toolbar refresh.
+
+Runs inside the smoke test's isolated Xvfb/D-Bus session. No browser cookies,
+launch tokens, or OCR text are written to the log.
+"""
+
+import argparse
+from collections import deque
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import time
+
+import gi
+from PIL import Image
+
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi, GLib  # noqa: E402
+
+
+def interface_kind(text):
+    labels = "".join(character for character in text.lower() if character.isalnum())
+    groups = {
+        "workspace": (
+            "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith",
+            "addworkspace", "添加工作区",
+        ),
+        "onboarding": (
+            "addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置",
+        ),
+        "preview": ("previewnotice", "预览须知", "预览说明", "预览提示", "预览公告"),
+    }
+    for kind, words in groups.items():
+        if any(word in labels for word in words):
+            return kind
+    return None
+
+
+def geometry(window):
+    result = subprocess.check_output(["xwininfo", "-id", window], text=True)
+    fields = {}
+    for key, pattern in {
+        "x": r"Absolute upper-left X:\s*(-?\d+)",
+        "y": r"Absolute upper-left Y:\s*(-?\d+)",
+        "width": r"\bWidth:\s*(\d+)",
+        "height": r"\bHeight:\s*(\d+)",
+    }.items():
+        match = re.search(pattern, result)
+        if match is None:
+            raise RuntimeError("Could not determine the client window bounds")
+        fields[key] = int(match.group(1))
+    if fields["x"] < 0 or fields["y"] < 0 or fields["width"] < 600 or fields["height"] < 400:
+        raise RuntimeError("The visible client window has invalid bounds")
+    return fields
+
+
+def capture_interface(window, output):
+    bounds = geometry(window)
+    area = ",".join(str(bounds[name]) for name in ("x", "y", "width", "height"))
+    subprocess.run(["scrot", "--overwrite", "--autoselect", area, str(output)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    # Only OCR DSH's content: the client's local toolbar must never satisfy this check.
+    with Image.open(output) as image:
+        region = image.crop((0, max(60, int(image.height * 0.11)), image.width, image.height))
+        region = region.resize((region.width * 2, region.height * 2))
+        with tempfile.TemporaryDirectory(prefix="dsh-window-ocr-") as scratch:
+            crop = Path(scratch) / "content.png"
+            region.save(crop)
+            text = subprocess.check_output(
+                ["tesseract", str(crop), "stdout", "-l", "eng+chi_sim", "--psm", "11"],
+                stderr=subprocess.DEVNULL, text=True, timeout=20,
+            )
+    return interface_kind(text)
+
+
+def wait_for_interface(pid, window, output):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        os.kill(pid, 0)
+        kind = capture_interface(window, output)
+        if kind is not None:
+            return kind
+        time.sleep(2)
+    raise RuntimeError("The actual client window did not show DSH content (blank/authentication error)")
+
+
+def is_toolbar_control(node, bounds):
+    component = node.get_component_iface()
+    if component is None:
+        return False
+    rect = component.get_extents(Atspi.CoordType.SCREEN)
+    # The smoke session fixes GTK scale to 1. Match the trusted shell's 40 px
+    # toolbar, never a similarly named button inside the separate DSH WebView.
+    return (rect.width > 0 and rect.height > 0
+            and rect.x >= bounds["x"] and rect.x + rect.width <= bounds["x"] + bounds["width"]
+            and rect.y >= bounds["y"] and rect.y + rect.height <= bounds["y"] + 40)
+
+
+def refresh_client(pid, window):
+    Atspi.init()
+    if hasattr(Atspi, "set_timeout"):
+        Atspi.set_timeout(1500, 3000)
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        bounds = geometry(window)
+        context = GLib.MainContext.default()
+        while context.pending():
+            context.iteration(False)
+        desktop = Atspi.get_desktop(0)
+        applications = []
+        for index in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(index)
+            if app is not None and app.get_process_id() == pid:
+                applications.append(app)
+        queue = deque(applications)
+        visited = 0
+        while queue and visited < 1500:
+            node = queue.popleft()
+            visited += 1
+            try:
+                states = node.get_state_set()
+                if (node.get_role() == Atspi.Role.PUSH_BUTTON
+                        and node.get_name() in ("Refresh", "刷新页面")
+                        and states.contains(Atspi.StateType.SHOWING)
+                        and (states.contains(Atspi.StateType.ENABLED)
+                             or states.contains(Atspi.StateType.SENSITIVE))
+                        and is_toolbar_control(node, bounds)):
+                    action = node.get_action_iface()
+                    if action is not None and action.get_n_actions() > 0 and action.do_action(0):
+                        return
+                for index in range(node.get_child_count()):
+                    child = node.get_child_at_index(index)
+                    if child is not None:
+                        queue.append(child)
+            except GLib.Error:
+                # Accessibility objects can be replaced while WebKit renders.
+                continue
+        time.sleep(0.5)
+    raise RuntimeError("Could not invoke the real client Refresh button through AT-SPI")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pid", type=int)
+    parser.add_argument("window")
+    parser.add_argument("screenshot", type=Path)
+    args = parser.parse_args()
+    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
+    windows = subprocess.check_output(["wmctrl", "-lp"], text=True).splitlines()
+    if not any(int(row.split()[0], 16) == int(args.window, 16)
+               and int(row.split()[2]) == args.pid for row in windows):
+        raise RuntimeError("Capture window does not belong to the test app")
+    subprocess.run(["wmctrl", "-ir", args.window, "-e", "0,0,0,1600,1000"], check=True)
+    subprocess.run(["wmctrl", "-ia", args.window], check=True)
+    before = wait_for_interface(args.pid, args.window, args.screenshot)
+    refresh_client(args.pid, args.window)
+    # Give the real toolbar navigation time to replace the previous document.
+    time.sleep(2)
+    after = wait_for_interface(args.pid, args.window, args.screenshot)
+    print(json.dumps({"rendered_dsh_before_refresh": before, "rendered_dsh_after_refresh": after,
+                      "toolbar_refresh": "AT-SPI action passed", "screenshot": str(args.screenshot)}), flush=True)
+
+
+if __name__ == "__main__":
+    main()

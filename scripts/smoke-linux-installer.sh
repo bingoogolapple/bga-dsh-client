@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# DSH_SCREENSHOT_PATH optionally retains the verified real window as a PNG.
+# DSH_SMOKE_VERSION additionally exercises an explicitly selected DSH version.
 set -euo pipefail
 
 if [[ "${1:-}" != --in-display ]]; then
@@ -25,14 +27,21 @@ if [[ "${1:-}" != --in-display ]]; then
   fi
 
   sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
-  sudo apt-get -o Acquire::Retries=3 install -y "$deb" xvfb xauth dbus-x11 x11-utils openbox wmctrl
+  sudo apt-get -o Acquire::Retries=3 install -y "$deb" xvfb xauth dbus-x11 x11-utils openbox wmctrl \
+    scrot tesseract-ocr tesseract-ocr-chi-sim python3-pil python3-gi gir1.2-atspi-2.0 \
+    at-spi2-core gsettings-desktop-schemas fonts-noto-cjk
   dpkg-query -W -f='${Status} ${Version}\n' "$package" | grep -Fx "install ok installed $app_version"
   probe_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/dsh-linux.XXXXXXXX")"
+  screenshot="${DSH_SCREENSHOT_PATH:-$probe_dir/client-window.png}"
+  if [[ "$screenshot" != /* || "$screenshot" != *.png ]]; then
+    echo 'DSH_SCREENSHOT_PATH must be an absolute PNG path' >&2
+    exit 2
+  fi
   # Session helpers can write to the XDG directories until Xvfb and D-Bus exit.
   # Keep the smoke test's exit status if the runner must finish removing scratch files.
   trap 'rm -rf -- "$probe_dir" || echo "Unable to fully remove $probe_dir" >&2' EXIT
   xvfb-run -a --server-args='-screen 0 1920x1200x24' \
-    dbus-run-session -- bash "$(realpath -e "$0")" --in-display "$variant" "$app_version" "$4" "$5" "$probe_dir"
+    dbus-run-session -- bash "$(realpath -e "$0")" --in-display "$variant" "$app_version" "$4" "$5" "$probe_dir" "$screenshot"
   exit
 fi
 
@@ -55,15 +64,49 @@ fi
 test "$("$expected_node" --version)" = "$node_version"
 
 probe_dir="$6"
+screenshot="$7"
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+# The selected-version regression must never write a real user's settings or
+# version directory. Default cold starts use this same isolated HOME too.
+export HOME="$probe_dir/home"
+mkdir -p "$HOME"
 export XDG_CONFIG_HOME="$probe_dir/config"
 export XDG_CACHE_HOME="$probe_dir/cache"
 export XDG_DATA_HOME="$probe_dir/data"
 export DSH_HOME="$probe_dir/dsh"
 export DSH_AGENTS_HOME="$probe_dir/agents"
 export npm_config_cache="$probe_dir/empty-external-npm-cache"
-export DO_NOT_TRACK=1 LIBGL_ALWAYS_SOFTWARE=1
+export DO_NOT_TRACK=1 LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=0 GDK_SCALE=1 GDK_DPI_SCALE=1
 app_dir="$XDG_CONFIG_HOME/cn.bingoogolapple.dsh"
 cd "$probe_dir"
+
+selected_version="${DSH_SMOKE_VERSION:-}"
+if [[ -n "$selected_version" ]]; then
+  python3 - "$selected_version" <<'PY_VERSION'
+import re
+import sys
+version = sys.argv[1]
+if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", version) or ".." in version:
+    raise SystemExit("DSH_SMOKE_VERSION must be a concrete package version")
+PY_VERSION
+  version_dir="$HOME/.dsh/bga-dsh-client/dsh-versions/$selected_version"
+  mkdir -p "$version_dir"
+  if [[ "$variant" == bundled ]]; then
+    npm_command=("$expected_node" "$runtime/nd/lib/node_modules/npm/bin/npm-cli.js")
+  else
+    npm_command=("$(command -v npm)")
+  fi
+  timeout 600s "${npm_command[@]}" install --prefix "$version_dir" --save-exact --no-audit --no-fund \
+    "@deepseek-ai/dsh@$selected_version"
+  python3 - "$HOME/.dsh/bga-dsh-client/settings.json" "$selected_version" <<'PY_SETTINGS'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps({"dsh_version": sys.argv[2], "stop_service_on_quit": True}))
+PY_SETTINGS
+fi
 
 cleanup() {
   result=$?
@@ -104,6 +147,10 @@ for ((attempt=0; attempt<15; attempt++)); do
   sleep 1
 done
 wmctrl -m >/dev/null
+# Start the accessibility bus before WebKitGTK creates either document.
+gsettings set org.gnome.desktop.interface toolkit-accessibility true
+gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus \
+  --method org.a11y.Bus.GetAddress >/dev/null
 
 started=$SECONDS
 "$app" >"$probe_dir/app.log" 2>&1 &
@@ -145,7 +192,10 @@ service_pid="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[
 test "$(ps -o ppid= -p "$service_pid" | tr -d '[:space:]')" = "$app_pid"
 test "$(ps -o pgid= -p "$listener_pid" | tr -d '[:space:]')" = "$service_pid"
 test "$(readlink -f "/proc/$listener_pid/exe")" = "$(readlink -f "$expected_node")"
-if [[ "$variant" == plain ]]; then
+if [[ -n "$selected_version" ]]; then
+  cli="$HOME/.dsh/bga-dsh-client/dsh-versions/$selected_version/node_modules/@deepseek-ai/dsh/lib/bin.js"
+  tr '\0' '\n' <"/proc/$listener_pid/cmdline" | grep -Fxq "$cli"
+elif [[ "$variant" == plain ]]; then
   grep -Fq 'npx --yes @deepseek-ai/dsh@latest web --no-open' "$app_dir/service.log"
   cli_arg="$(tr '\0' '\n' <"/proc/$listener_pid/cmdline" | grep -E '/_npx/.*/(dsh|@deepseek-ai/dsh/lib/bin\.js)$')"
   cli="$(readlink -f "$cli_arg")"
@@ -156,7 +206,9 @@ else
 fi
 test -f "$cli"
 dsh_version="$(timeout 15s "$expected_node" "$cli" --version)"
-if [[ "$variant" == bundled ]]; then
+if [[ -n "$selected_version" ]]; then
+  test "$dsh_version" = "$selected_version"
+elif [[ "$variant" == bundled ]]; then
   test "$dsh_version" = "$bundled_dsh_version"
 fi
 
@@ -185,5 +237,7 @@ except Exception as error:
 PY_AUTH
 
 kill -0 "$app_pid"
+/usr/bin/python3 "$script_dir/capture-linux-window.py" "$app_pid" "$window" "$screenshot"
+echo 'PASS: The real Linux WebKitGTK window showed DSH content before and after toolbar refresh'
 printf 'PASS: App %s (Ubuntu 24.04, %s) started dsh %s with Node %s after %s seconds. HTTP 401 and authenticated HTTP 200 confirmed.\n' \
   "$app_version" "$variant" "$dsh_version" "$node_version" "$((SECONDS - started))"

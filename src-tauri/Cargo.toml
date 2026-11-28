@@ -17,7 +17,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png", "unstable"] }
 tauri-plugin-single-instance = "2"
 qrcode = "0.14"
 arboard = "3"
@@ -46,6 +46,10 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wry adds child WebViews to GTK's native Box; reserve the shell toolbar there.
+gtk = "0.18"
 
 [profile.release]
 strip = true

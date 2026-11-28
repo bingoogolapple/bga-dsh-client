@@ -105,12 +105,12 @@ PY
   rm -rf -- "$scratch/zip"
 fi
 
-if [[ -n "$screenshot" ]]; then
-  # Compile before launch so screenshot tooling adds no time to the cold start.
-  swiftc "$script_dir/capture-macos-window.swift" -o "$scratch/capture-window"
-  mkdir -p -- "$(dirname -- "$screenshot")"
-  rm -f -- "$screenshot"
-fi
+# Every installer must show the DSH interface, even when no screenshot artifact
+# was requested. Compile before launch so this adds no time to the cold start.
+if [[ -z "$screenshot" ]]; then screenshot="$scratch/client-window.png"; fi
+swiftc "$script_dir/capture-macos-window.swift" -o "$scratch/capture-window"
+mkdir -p -- "$(dirname -- "$screenshot")"
+rm -f -- "$screenshot"
 
 if [[ "$variant" == bundled ]]; then
   NODE_VERSION=${NODE_VERSION:-$(sed -nE "s/^const NODE_VER = '([^']+)'$/\1/p" "$script_dir/bundle-runtime.mjs")}
@@ -308,9 +308,8 @@ with app_log.open("wb") as output:
         seconds = time.monotonic() - started
         print(f"App {expected_version} (macOS {arch}, {variant}) started dsh {dsh_version} after {seconds:.1f} seconds. "
               "Unauthenticated HTTP 401 and authenticated HTTP 200 confirmed.", flush=True)
-        if screenshot:
-            subprocess.run([scratch / "capture-window", str(proc.pid), screenshot], check=True, timeout=120)
-            print("PASS: Captured the running macOS client with its dsh interface.", flush=True)
+        subprocess.run([scratch / "capture-window", str(proc.pid), screenshot], check=True, timeout=120)
+        print("PASS: Captured the running macOS client with its dsh interface.", flush=True)
     except Exception:
         show_failure_logs()
         raise

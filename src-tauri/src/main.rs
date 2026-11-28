@@ -20,6 +20,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod dsh;
+mod dsh_view;
 mod i18n;
 mod pairing;
 mod service;
@@ -60,7 +61,7 @@ pub struct AppState {
     pub pairing: Mutex<Pairing>,
     /// 新版 dsh 的进程启动令牌（从 service.log 的启动行解析；每个 dsh 进程一变）。
     pub dsh_token: Mutex<Option<String>>,
-    pub dsh_session_token: Mutex<Option<String>>,
+    pub(crate) dsh_view: Mutex<dsh_view::State>,
     /// 设置页左下角版本信息缓存（磁盘 version-cache.json + 内存渲染快照）。
     /// get_version_info 秒回缓存，后台线程异步完整探测后刷新。
     pub version_cache: Mutex<VersionCache>,
@@ -82,6 +83,21 @@ fn query_status(app: tauri::AppHandle) -> service::ServiceInfo {
 #[tauri::command]
 fn has_bundled_runtime(app: tauri::AppHandle) -> bool {
     service::runtime_root(&app).is_some()
+}
+
+#[tauri::command]
+fn uses_native_dsh_view() -> bool {
+    true
+}
+
+#[tauri::command]
+async fn load_dsh_view(app: tauri::AppHandle, force: bool, revision: u64) -> Result<(), String> {
+    dsh_view::load(&app, force, revision).await
+}
+
+#[tauri::command]
+async fn hide_dsh_view(app: tauri::AppHandle, revision: u64) -> Result<(), String> {
+    dsh_view::hide(&app, revision)
 }
 
 #[tauri::command]
@@ -211,14 +227,14 @@ async fn dsh_launch_url(app: tauri::AppHandle) -> String {
     // 历史日志回填或尾随线程已经抓到令牌时无需等待。
     let cached_token = { crate::state::lock(&state.dsh_token).clone() };
     if let Some(token) = cached_token {
-        return service::install_browser_session(&app, &token).await;
+        return service::launch_url(Some(&token));
     }
     const TOKEN_WAIT: Duration = Duration::from_secs(6);
     let deadline = Instant::now() + TOKEN_WAIT;
     loop {
         let captured_token = { crate::state::lock(&state.dsh_token).clone() };
         if let Some(token) = captured_token {
-            return service::install_browser_session(&app, &token).await;
+            return service::launch_url(Some(&token));
         }
         if !ServiceManager::is_up() || Instant::now() >= deadline {
             return service::launch_url(None);
@@ -290,7 +306,8 @@ pub(crate) fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::proc
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
+    let window = app.get_window("main");
+    if let Some(w) = window {
         let _ = w.show();
         let _ = w.set_focus();
     }
@@ -338,12 +355,15 @@ fn main() {
             tray: Mutex::new(None),
             pairing: Mutex::new(Pairing::new()),
             dsh_token: Mutex::new(None),
-            dsh_session_token: Mutex::new(None),
+            dsh_view: Mutex::new(dsh_view::State::default()),
             version_cache: Mutex::new(VersionCache::new()),
         })
         .invoke_handler(tauri::generate_handler![
             query_status,
             has_bundled_runtime,
+            uses_native_dsh_view,
+            load_dsh_view,
+            hide_dsh_view,
             get_settings,
             save_settings,
             set_telemetry_enabled,
@@ -385,6 +405,12 @@ fn main() {
             force_refresh_version_info
         ])
         .on_window_event(|window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                let _ = dsh_view::resize(window);
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 关窗只隐藏：服务继续运行，随时可从托盘恢复窗口。
                 api.prevent_close();
@@ -392,14 +418,10 @@ fn main() {
             }
         })
         .setup(|app| {
-            // 主窗口在 Tauri 配置里声明为 `create: false`（只当模板），在这里手动构建，
-            // 唯一目的是挂上 `on_new_window`。
-            //
-            // 主窗口内嵌的是 http://127.0.0.1:3080 的 DSH Web GUI（跨源 iframe）。页面里的
-            // `target="_blank"` / `window.open` 会变成 webview 的新窗口请求，而 wry 在没有
-            // 处理器时直接 `SetHandled(true)` 把它们吞掉——表现就是「点了没反应」。
-            // 这里改成用系统浏览器打开，再拒绝在应用内建窗：聊天里的 Markdown 外链和插件
-            // 里的链接一并生效，也不必给远程源开 IPC 权限（那是更大的口子）。
+            // 从配置模板手动创建本地工具栏/启动界面，并将新窗口请求交给系统浏览器。
+            // DSH 内容由 dsh_view 创建为独立原生 WebView，保持第一方浏览器认证。
+            // 两处 WebView 都处理 target="_blank" / window.open，避免 wry 默认吞掉外链，
+            // 同时不向远程 DSH 页面授予本地 IPC 权限。
             let window_config = app
                 .config()
                 .app

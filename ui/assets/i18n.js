@@ -27,6 +27,7 @@
       "splash.detecting": "正在检测服务…",
       "splash.start": "启动服务",
       "splash.retry": "重试",
+      "splash.webview_failed": "无法加载 dsh 页面，请重试。",
 
       // 服务状态徽标
       "state.none": "未运行",
@@ -203,6 +204,7 @@
       "splash.detecting": "Detecting service…",
       "splash.start": "Start Service",
       "splash.retry": "Retry",
+      "splash.webview_failed": "Unable to load the dsh page. Please retry.",
 
       "state.none": "Not Running",
       "state.starting": "Starting",

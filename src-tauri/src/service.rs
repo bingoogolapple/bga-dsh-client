@@ -185,6 +185,10 @@ impl ServiceManager {
         head.starts_with("HTTP/1.") && head.as_bytes().get(8) == Some(&b' ')
     }
 
+    pub(crate) fn current_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
     /// 当前服务信息（供命令与事件共用）。
     pub fn info(&self, handle: &AppHandle) -> ServiceInfo {
         let starting = self.starting.load(Ordering::SeqCst);
@@ -1152,7 +1156,6 @@ pub(crate) fn scrub_launch_tokens(app: &AppHandle) {
 /// 服务已下线：进程令牌随之作废（下一个进程会打印新令牌），内存与磁盘都不留残余。
 pub(crate) fn forget_launch_token(app: &AppHandle) {
     *crate::state::lock(&app.state::<AppState>().dsh_token) = None;
-    *crate::state::lock(&app.state::<AppState>().dsh_session_token) = None;
     let _ = std::fs::remove_file(launch_token_path(app));
 }
 
@@ -1175,11 +1178,9 @@ fn resync_log_offset(file: &mut std::fs::File) {
 /// 令牌随即从地址栏消失；没有令牌（旧版 dsh、外部服务、日志已轮转）就用裸
 /// 地址——此前换过的 cookie 仍在有效期内时一样能进。
 pub(crate) fn launch_url(token: Option<&str>) -> String {
-    // 注意：dev 与 release 必须使用不同 Host，不能为了“统一”而改成同一个：
-    // - dev：Vite/dsh 开发流程使用数值回环地址 127.0.0.1；
-    // - release：Tauri 页面来源是 tauri.localhost，必须使用 localhost，
-    //   才能让 dsh 的 SameSite=Strict 认证 Cookie 保持同站并被 WebView 发送。
-    // dsh 的认证 Cookie 绑定 Host，改错任一地址都会导致认证失败。
+    // Keep each build's established cookie Host: dev uses numeric loopback,
+    // production uses localhost. All platforms load DSH as a first-party
+    // native WebView, with the token exchange inside that document's store.
     let host = if cfg!(debug_assertions) {
         "127.0.0.1"
     } else {
@@ -1189,94 +1190,6 @@ pub(crate) fn launch_url(token: Option<&str>) -> String {
     match token {
         Some(t) if !t.is_empty() => format!("{base}/?token={t}"),
         _ => base,
-    }
-}
-
-/// Exchange the process launch token outside the iframe and install the
-/// resulting HttpOnly cookie directly into the main WebView. Packaged WebView2
-/// can reject a Set-Cookie received by a cross-origin iframe even though the
-/// same navigation works under the development server.
-#[cfg_attr(not(windows), allow(unused_variables))]
-pub(crate) async fn install_browser_session(app: &AppHandle, token: &str) -> String {
-    // On macOS the WebKit navigation itself must perform the token exchange.
-    // Consuming the one-shot token with reqwest and then relying on the native
-    // cookie store is fragile in packaged WebKit: the cookie may be installed
-    // in a store that the production webview does not use, leaving the iframe
-    // at the bare URL and therefore unauthorized. Windows WebView2 still
-    // needs the native-cookie workaround below.
-    #[cfg(not(windows))]
-    {
-        launch_url(Some(token))
-    }
-
-    #[cfg(windows)]
-    {
-        use reqwest::header::SET_COOKIE;
-
-        let already_installed = {
-            crate::state::lock(&app.state::<AppState>().dsh_session_token).as_deref() == Some(token)
-        };
-        if already_installed {
-            return launch_url(None);
-        }
-
-        let token_url = launch_url(Some(token));
-        let request_url = token_url.clone();
-        let cookie = tokio::task::spawn_blocking(move || {
-            reqwest::blocking::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(2))
-                .build()
-                .and_then(|client| client.get(&request_url).send())
-                .ok()
-                .filter(|response| response.status().is_redirection())
-                .and_then(|response| {
-                    response
-                        .headers()
-                        .get(SET_COOKIE)
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_owned)
-                })
-                .and_then(|header| tauri::webview::Cookie::parse(header).ok())
-                .map(|cookie| cookie.into_owned())
-        })
-        .await
-        .ok()
-        .flatten();
-
-        let installed = cookie
-            .and_then(|mut cookie| {
-                // DSH intentionally emits a host-only cookie. WebView2's native
-                // cookie API requires the destination domain to be explicit.
-                // It must match `launch_url`: dev uses 127.0.0.1, release uses
-                // localhost. Otherwise the iframe requests a different host
-                // and the cookie is not sent, resulting in a 401.
-                let cookie_domain = if cfg!(debug_assertions) {
-                    "127.0.0.1"
-                } else {
-                    "localhost"
-                };
-                cookie.set_domain(cookie_domain);
-                cookie.set_path("/");
-                #[cfg(windows)]
-                {
-                    cookie.set_same_site(tauri::webview::cookie::SameSite::None);
-                    cookie.set_secure(true);
-                }
-                app.get_webview_window("main")
-                    .and_then(|window| window.set_cookie(cookie).ok())
-            })
-            .is_some();
-
-        if installed {
-            *crate::state::lock(&app.state::<AppState>().dsh_session_token) =
-                Some(token.to_owned());
-            launch_url(None)
-        } else {
-            // Preserve the browser-based exchange as a safe fallback on platforms
-            // where the native cookie store is unavailable.
-            token_url
-        }
     }
 }
 
