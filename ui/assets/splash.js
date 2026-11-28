@@ -22,9 +22,32 @@
   // 服务每次启动都会换一个新的启动令牌，所以地址要每轮都问一次；是否真的
   // 重新加载由 loadFrame 判断（地址没变就不动，令牌没抓到时不降级）。
   let frameGeneration = 0;
+  // DSH has its own top-level native WebView on every desktop platform.
+  // Cross-site iframes are rejected by newer DSH browser-source checks.
+  const nativeDshView = await invoke("uses_native_dsh_view");
+  let nativeLoadFailed = false;
 
   async function loadFrame(force = false) {
     const generation = frameGeneration;
+    if (nativeDshView) {
+      const revision = lastStatusRevision;
+      try {
+        await invoke("load_dsh_view", { force, revision });
+        if (generation !== frameGeneration || revision !== lastStatusRevision) return;
+        nativeLoadFailed = false;
+        els.splash.classList.add("hidden");
+      } catch {
+        if (generation !== frameGeneration || revision !== lastStatusRevision) return;
+        nativeLoadFailed = true;
+        invoke("hide_dsh_view", { revision }).catch(() => {});
+        els.splashStatus.textContent = t("splash.webview_failed");
+        els.splash.classList.remove("hidden");
+        els.spinner.classList.add("hidden");
+        els.btnStart.classList.add("hidden");
+        els.btnRetry.classList.remove("hidden");
+      }
+      return;
+    }
     let url = DSH_URL;
     try {
       url = await invoke("dsh_launch_url");
@@ -100,7 +123,7 @@
       if (enteringRunning) retryFrameLoads();
       errorLogLoaded = false;
       els.frameWrap.classList.remove("hidden");
-      els.splash.classList.add("hidden");
+      if (!nativeLoadFailed) els.splash.classList.add("hidden");
     } else {
       if (wasRunning) frameGeneration += 1;
       wasRunning = false;
@@ -113,6 +136,8 @@
       restartInProgress = false;
       els.frameWrap.classList.add("hidden");
       els.frame.setAttribute("src", "about:blank");
+      if (nativeDshView) invoke("hide_dsh_view", { revision }).catch(() => {});
+      nativeLoadFailed = false;
       els.splash.classList.remove("hidden");
       els.spinner.classList.toggle("hidden", info.state !== "starting");
       els.btnStart.classList.toggle("hidden", info.state === "starting");
@@ -150,7 +175,10 @@
   window.addEventListener("dsh:locale", () => poll());
 
   els.btnStart.onclick = () => invoke("service_start");
-  els.btnRetry.onclick = () => invoke("service_start");
+  els.btnRetry.onclick = () => {
+    if (nativeLoadFailed) loadFrame(true);
+    else invoke("service_start");
+  };
   els.btnSettings.onclick = () => invoke("open_settings_window");
   els.btnOpenBrowser.onclick = () => invoke("open_dsh_in_browser");
   els.btnRefresh.onclick = () => location.reload();

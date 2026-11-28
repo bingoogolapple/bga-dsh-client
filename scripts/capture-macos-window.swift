@@ -33,11 +33,23 @@ func containsDshInterface(_ url: URL) throws -> Bool {
     try VNImageRequestHandler(cgImage: image).perform([request])
     let labels = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
         .joined(separator: " ").lowercased().filter { $0.isLetter || $0.isNumber }
-    return [
+    // Authentication error documents are valid HTTP/WebView loads, but they
+    // never satisfy the rendered-page check.
+    if ["forbidden", "unauthorized", "authenticationunavailable", "403forbidden", "401unauthorized"]
+        .contains(labels) {
+        return false
+    }
+
+    // A fresh profile can show the workspace, first-run configuration, or a
+    // preview notice. Accept each of these real DSH views without requiring
+    // controls that another first-run dialog may cover.
+    let workspace = [
         "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith", "addworkspace", "添加工作区",
-        "addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置",
-        "previewnotice", "预览须知", "预览说明", "预览提示", "预览公告",
-    ].contains(where: labels.contains)
+        "describewhatyouwanttobuild", "描述你想要构建的内容",
+    ]
+    let onboarding = ["addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置"]
+    let preview = ["previewnotice", "预览须知", "预览说明", "预览提示", "预览公告"]
+    return (workspace + onboarding + preview).contains(where: labels.contains)
 }
 
 guard CommandLine.arguments.count == 3, let pid = Int(CommandLine.arguments[1]), pid > 0 else {
@@ -58,13 +70,15 @@ for _ in 0..<20 {
             capture.arguments = ["-x", "-o", "-a", "-T0", "-l\(id)", candidate.path]
             try capture.run()
             capture.waitUntilExit()
-            if capture.terminationStatus == 0, try containsDshInterface(candidate) {
+            if capture.terminationStatus == 0, files.fileExists(atPath: candidate.path) {
+                // Keep the last actual frame for diagnosis if OCR never succeeds.
+                if files.fileExists(atPath: output.path) { try files.removeItem(at: output) }
                 try files.moveItem(at: candidate, to: output)
-                exit(EXIT_SUCCESS)
+                if try containsDshInterface(output) { exit(EXIT_SUCCESS) }
+                lastError = "Window capture did not show the dsh interface"
+            } else {
+                lastError = "screencapture produced no PNG (exit \(capture.terminationStatus))"
             }
-            lastError = files.fileExists(atPath: candidate.path)
-                ? "Window capture did not show the dsh interface"
-                : "screencapture produced no PNG (exit \(capture.terminationStatus))"
         } catch {
             lastError = error.localizedDescription
         }

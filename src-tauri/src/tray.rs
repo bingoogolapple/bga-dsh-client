@@ -206,7 +206,8 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<TrayMenu> {
 
 /// 显示并聚焦主窗口（配合单实例重复启动聚焦）。
 pub fn show_main_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
+    let window = app.get_window("main");
+    if let Some(w) = window {
         let _ = w.show();
         if w.is_minimized().unwrap_or(false) {
             let _ = w.unminimize();

@@ -171,24 +171,9 @@ public static class DshSmokeWindow
                 }
                 if (!$running) { continue }
 
-                # Require visible detail in the content area as well as the status pill.
-                # A blank WebView or a single-line authentication error is not a useful screenshot.
-                $detailedRows = 0
-                for ($y = 85; $y -lt ($height - 10) -and $detailedRows -lt 4; $y += 6) {
-                    $previous = $bitmap.GetPixel(0, $y)
-                    for ($x = 3; $x -lt $width; $x += 3) {
-                        $color = $bitmap.GetPixel($x, $y)
-                        $difference = [Math]::Abs($color.R - $previous.R) +
-                            [Math]::Abs($color.G - $previous.G) + [Math]::Abs($color.B - $previous.B)
-                        if ($difference -gt 150) {
-                            $detailedRows++
-                            break
-                        }
-                        $previous = $color
-                    }
-                }
-                if ($detailedRows -lt 4) { continue }
-
+                # The independent UI Automation check below validates DSH
+                # content and interaction. Save error/blank pages too so a
+                # failed page check still leaves a useful screenshot artifact.
                 $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
                 $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
                 Write-Host "Saved client window screenshot ($width x $height): $Path"
@@ -269,6 +254,12 @@ function Test-SmokeService($Process) {
     $exePath = [string]$Process.ExecutablePath
     if ($exePath.StartsWith('\\?\')) { $exePath = $exePath.Substring(4) }
     $commandLine = ([string]$Process.CommandLine).Replace('/', '\')
+    if ($smokeDshVersion) {
+        if (!$pinnedDsh) { return $false }
+        $expectedNode = if ($Variant -eq 'bundled') { $bundledNode } else { $systemNode }
+        return $exePath -ieq $expectedNode -and
+            $commandLine.Contains($pinnedDsh, [StringComparison]::OrdinalIgnoreCase)
+    }
     if ($Variant -eq 'bundled') {
         return $exePath -ieq $bundledNode -and
             $commandLine.Contains($bundledDsh, [StringComparison]::OrdinalIgnoreCase)
@@ -280,11 +271,16 @@ function Test-SmokeService($Process) {
 }
 
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
+$smokeDshVersion = $env:DSH_SMOKE_VERSION
+if ($smokeDshVersion -and $smokeDshVersion -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?$') {
+    throw 'DSH_SMOKE_VERSION must be an exact semantic version'
+}
 if ($ScreenshotPath) {
     $ScreenshotPath = [IO.Path]::GetFullPath($ScreenshotPath, (Get-Location).ProviderPath)
 }
 if ($Variant -eq 'bundled' -and !$BundledDshVersion) { throw 'BundledDshVersion is required for the bundled installer' }
 $probeDir = Join-Path ([IO.Path]::GetTempPath()) "dsh-smoke-$([Guid]::NewGuid().ToString('N'))"
+if (!$ScreenshotPath) { $ScreenshotPath = Join-Path $probeDir 'client-window.png' }
 $installDir = Join-Path $env:LOCALAPPDATA 'DeepSeekHarness'
 if (Test-Path -LiteralPath $installDir) { throw 'Expected a fresh install location' }
 $appPath = Join-Path $installDir 'DeepSeekHarness.exe'
@@ -293,6 +289,7 @@ $bundledDsh = Join-Path $installDir 'runtime\rt\node_modules\@deepseek-ai\dsh\li
 $appConfig = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'cn.bingoogolapple.dsh'
 $settingsDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.dsh\bga-dsh-client'
 $npxCachePrefix = Join-Path $appConfig 'npm-cache\_npx'
+$pinnedDsh = $null
 if ((Test-Path -LiteralPath $appConfig) -or (Test-Path -LiteralPath $settingsDir) -or (Get-DshListener)) {
     throw 'Expected a fresh Windows runner with no client data and no listener on port 3080'
 }
@@ -311,7 +308,10 @@ $envChanges = @{
     DSH_AGENTS_HOME = Join-Path $probeDir 'agents'
     DO_NOT_TRACK = '1'
     npm_config_cache = Join-Path $probeDir 'empty-external-npm-cache'
+    npm_config_maxsockets = '48'
+    npm_config_audit = 'false'
     WEBVIEW2_USER_DATA_FOLDER = Join-Path $probeDir 'webview'
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = (($env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS + ' --force-renderer-accessibility').Trim())
 }
 $savedEnv = @{}
 $setup = $null
@@ -346,12 +346,39 @@ try {
             throw "Expected bundled dsh version $BundledDshVersion, got $dshVersion"
         }
         Write-Host "Installed bundled CLI returns $dshVersion when run directly"
+        $actualNodeVersion = (& $bundledNode --version)
+        if ($LASTEXITCODE -ne 0 -or ($NodeVersion -and $actualNodeVersion.TrimStart('v') -ne $NodeVersion.TrimStart('v'))) {
+            throw "Expected bundled Node $NodeVersion, got $actualNodeVersion"
+        }
     } elseif (Test-Path -LiteralPath $bundledNode) {
         throw 'Plain installer unexpectedly includes the bundled Node runtime'
     }
 
     if ((Test-Path -LiteralPath $appConfig) -or (Test-Path -LiteralPath $settingsDir)) {
         throw 'Installer unexpectedly created app configuration or an npm cache'
+    }
+    if ($smokeDshVersion) {
+        # Exercise an explicitly selected newer DSH with the same installed
+        # package. This preparation is restricted to the fresh runner profile.
+        $versionDir = Join-Path $settingsDir "dsh-versions\$smokeDshVersion"
+        $null = New-Item -ItemType Directory -Path $versionDir -Force
+        $launchNode = if ($Variant -eq 'bundled') { $bundledNode } else { $systemNode }
+        $npmCli = if ($Variant -eq 'bundled') {
+            Join-Path $installDir 'runtime\nd\node_modules\npm\bin\npm-cli.js'
+        } else {
+            Join-Path (Split-Path -Parent $systemNode) 'node_modules\npm\bin\npm-cli.js'
+        }
+        if (!(Test-Path -LiteralPath $npmCli -PathType Leaf)) { throw 'The selected Node is missing npm-cli.js' }
+        & $launchNode $npmCli install --prefix $versionDir --save-exact --no-audit --no-fund --registry https://registry.npmjs.org "@deepseek-ai/dsh@$smokeDshVersion"
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to prepare the selected DSH regression version' }
+        $pinnedDsh = Join-Path $versionDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+        if (!(Test-Path -LiteralPath $pinnedDsh -PathType Leaf)) { throw 'Selected DSH entry point is missing' }
+        $selectedVersion = (& $launchNode $pinnedDsh --version)
+        if ($LASTEXITCODE -ne 0 -or $selectedVersion -ne $smokeDshVersion) { throw 'Selected DSH version does not match its package' }
+        $settings = @{ dsh_version = $smokeDshVersion; stop_service_on_quit = $true; telemetry_enabled = $false }
+        [IO.File]::WriteAllText((Join-Path $settingsDir 'settings.json'), ($settings | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+        $dshVersion = $selectedVersion
+        Write-Host "Prepared selected dsh $smokeDshVersion for the $Variant installer"
     }
     Write-Host "Cold launch in the default install directory: $installDir"
     $startup = [Diagnostics.Stopwatch]::StartNew()
@@ -416,7 +443,7 @@ try {
     $app.Refresh()
     if ($app.HasExited) { throw "Application exited early with code $($app.ExitCode)" }
 
-    if ($Variant -eq 'plain') {
+    if ($Variant -eq 'plain' -and !$smokeDshVersion) {
         $serviceText = Get-Content -LiteralPath $serviceLog -Raw
         if ($serviceText -notmatch 'npx --yes @deepseek-ai/dsh@latest web --no-open') {
             throw 'App did not use the default npx latest command'
@@ -430,10 +457,17 @@ try {
         if (!$dshVersion) { throw 'dsh package version was not recorded' }
     }
     $seconds = [Math]::Round($startup.Elapsed.TotalSeconds, 1)
-    if ($ScreenshotPath) {
-        Save-ClientScreenshot -App $app -Path $ScreenshotPath
-    }
-    Write-Host "PASS: $AppVersion $Variant desktop window opened, dsh $dshVersion returned authenticated HTTP 200 after $seconds seconds"
+    Save-ClientScreenshot -App $app -Path $ScreenshotPath
+    $pageEvidence = [IO.Path]::ChangeExtension($ScreenshotPath, '.page.json')
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'assert-windows-page.ps1') `
+        -WindowHandle ($app.MainWindowHandle.ToInt64()) -EvidencePath $pageEvidence
+    if ($LASTEXITCODE -ne 0) { throw 'The actual installed DSH WebView page or interaction failed verification' }
+    Save-ClientScreenshot -App $app -Path $ScreenshotPath
+    & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'assert-windows-page.ps1') `
+        -WindowHandle ($app.MainWindowHandle.ToInt64()) -EvidencePath $pageEvidence -WorkspaceOnly
+    if ($LASTEXITCODE -ne 0) { throw 'The final screenshot did not show the verified unobstructed DSH workspace' }
+    Write-Host "PASS: $AppVersion $Variant rendered its actual DSH workspace and plugin page, survived refresh, and dsh $dshVersion returned authenticated HTTP 200 after $seconds seconds"
 } catch {
     if ($Variant -eq 'plain') {
         $npmCache = Join-Path $appConfig 'npm-cache'
