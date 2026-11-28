@@ -9,6 +9,7 @@
 # 发版前先 ./scripts/set-app-version.sh 对齐客户端应用版本，
 # 保证 tauri.conf.json 版本与 tag 一致（release.yml 有校验）。
 # 内置运行时的版本（node/pnpm/dsh）定义与修改入口见 RUNTIME-VERSIONING.md。
+# Apple Silicon 恢复打包可设置 DSH_STAGE_MACOS_DMG=1，沿用 Intel 的目录暂存 DMG 流程。
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -84,14 +85,14 @@ fi
 
 # Intel runner 上，Tauri 为布置 DMG 挂载的可写映像在卸载时曾超时。
 # 先在普通目录放好 .app 和 Applications 链接，再直接生成只读压缩映像。
-build_intel_dmg() (
-  local app="$1" out_dir="$2" variant="$3"
+build_staged_macos_dmg() (
+  local app="$1" out_dir="$2" variant="$3" dmg_arch="$4"
   local app_name="${app##*/}"
   local product="${app_name%.app}"
   local version staging dmg suffix=""
   version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
   if [[ "$variant" == "bundled" ]]; then suffix="-bundled"; fi
-  dmg="${product}_${version}_x64${suffix}.dmg"
+  dmg="${product}_${version}_${dmg_arch}${suffix}.dmg"
   staging="$(mktemp -d "$out_dir/.dmg.XXXXXXXX")"
   trap 'rm -rf "$staging"' EXIT
 
@@ -111,22 +112,31 @@ build_one() {
 
   echo "==> tauri build ($variant)…"
   local tauri_args=(build)
-  local intel_dmg=0
+  local staged_dmg_arch=""
   if [[ "${TAURI_BUILD_VERBOSE:-0}" == 1 ]]; then
     tauri_args+=(--verbose)
   fi
   if [[ "$variant" == "bundled" ]]; then
     tauri_args+=("${BUNDLE_EXTRA[@]}")
   fi
-  if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "x86_64" ]]; then
-    intel_dmg=1
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    case "$(uname -m)" in
+      x86_64) staged_dmg_arch="x64" ;;
+      arm64)
+        if [[ "${DSH_STAGE_MACOS_DMG:-0}" == 1 ]]; then
+          staged_dmg_arch="aarch64"
+        fi
+        ;;
+    esac
+  fi
+  if [[ -n "$staged_dmg_arch" ]]; then
     tauri_args+=(--bundles app)
   fi
   npm run tauri -- "${tauri_args[@]}"
 
   bundle_root="src-tauri/target/release/bundle"
-  if [[ "$intel_dmg" == 1 ]]; then
-    build_intel_dmg "$bundle_root/macos/DeepSeekHarness.app" "$out_dir" "$variant"
+  if [[ -n "$staged_dmg_arch" ]]; then
+    build_staged_macos_dmg "$bundle_root/macos/DeepSeekHarness.app" "$out_dir" "$variant" "$staged_dmg_arch"
     echo "==> 产物: $out_dir"
     ls -la "$out_dir"
     return

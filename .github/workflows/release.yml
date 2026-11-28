@@ -1,9 +1,6 @@
-name: Release
+name: Release recovery / v0.0.18
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       repeat_windows_plain:
@@ -12,15 +9,22 @@ on:
         default: false
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-refs/tags/v0.0.18
   cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  RELEASE_TAG: v0.0.18
+  RELEASE_SOURCE_SHA: 31009aa32b7ffa180a0b9aec734918965564702e
+  OFFICIAL_RUN_ID: '46140915767'
 
 jobs:
   prepare:
     name: 校验发布版本
+    if: github.ref == 'refs/heads/codex/release-v0.0.18-arm-recovery'
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
@@ -28,15 +32,17 @@ jobs:
       node_ver: ${{ steps.versions.outputs.node_ver }}
       dsh_version: ${{ steps.versions.outputs.dsh_version }}
       pnpm_version: ${{ steps.versions.outputs.pnpm_version }}
+      macos_intel: ${{ steps.reuse.outputs.macos_intel }}
+      linux: ${{ steps.reuse.outputs.linux }}
+      windows: ${{ steps.reuse.outputs.windows }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.RELEASE_SOURCE_SHA }}
       - name: 读取 App 和运行时版本
         id: versions
         shell: python
-        env:
-          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           import json
           import os
@@ -64,6 +70,62 @@ jobs:
                       raise SystemExit(f"Missing {key} in bundle-runtime.mjs")
                   print(f"{key.lower()}={match[1]}", file=output)
           print(f"Application version: {version}")
+      - name: Verify the tag and the three reusable build artifacts
+        id: reuse
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["RELEASE_TAG"]
+          sha = os.environ["RELEASE_SOURCE_SHA"]
+          run_id = int(os.environ["OFFICIAL_RUN_ID"])
+
+          def api(path):
+              return json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/{path}"]))
+
+          ref = api(f"git/ref/tags/{tag}")["object"]
+          target = api(f"git/tags/{ref['sha']}")["object"] if ref["type"] == "tag" else {}
+          if target.get("type") != "commit" or target.get("sha") != sha:
+              raise SystemExit("The annotated release tag no longer points to the approved commit")
+          run = api(f"actions/runs/{run_id}")
+          if (run["event"], run["head_branch"], run["head_sha"], run["path"].split("@", 1)[0]) != ("push", tag, sha, ".github/workflows/release.yml"):
+              raise SystemExit("The source run does not belong to this tag and Release workflow")
+          if run["status"] != "completed" or run["conclusion"] != "failure":
+              raise SystemExit("The original Release must have ended with an unsuccessful build")
+
+          artifacts = api(f"actions/runs/{run_id}/artifacts?per_page=100")["artifacts"]
+          completed_jobs = {}
+          with (open(os.environ["GITHUB_OUTPUT"], "a") as outputs,
+                open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary):
+              print(f"Release source: `{sha}` from `{tag}`. Reused [official run {run_id}](https://github.com/{repo}/actions/runs/{run_id}).", file=summary)
+              for platform, runner in (("macos_intel", "macos-26-intel"), ("linux", "ubuntu-26.04"), ("windows", "windows-2025")):
+                  valid = []
+                  for artifact in artifacts:
+                      match = re.fullmatch(rf"release-{re.escape(runner)}-([1-9][0-9]*)", artifact["name"])
+                      if (not match or artifact["expired"] or artifact["size_in_bytes"] <= 0
+                              or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest") or "")):
+                          continue
+                      if any(artifact["workflow_run"].get(key) != value for key, value in (("id", run_id), ("head_sha", sha), ("head_branch", tag))):
+                          raise SystemExit(f"Unexpected provenance for {artifact['name']}")
+                      attempt = int(match[1])
+                      if attempt not in completed_jobs:
+                          completed_jobs[attempt] = api(f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")["jobs"]
+                      if any(job["name"] == f"构建 / {runner}" and job["conclusion"] == "success"
+                             and any(step["name"] == "上传安装包" and step["conclusion"] == "success" for step in job["steps"])
+                             for job in completed_jobs[attempt]):
+                          valid.append((attempt, artifact["id"]))
+                  if not valid:
+                      raise SystemExit(f"No completed build artifact for {runner}")
+                  _, artifact_id = max(valid)
+                  print(f"{platform}={artifact_id}", file=outputs)
+                  print(f"Reusing official {runner} artifact {artifact_id}")
+                  print(f"- {runner}: artifact {artifact_id}", file=summary)
 
   build:
     name: 构建 / ${{ matrix.platform }}
@@ -74,12 +136,6 @@ jobs:
       checks: write
     outputs:
       macos_arm: ${{ steps.artifact.outputs.macos_arm }}
-      macos_intel: ${{ steps.artifact.outputs.macos_intel }}
-      linux: ${{ steps.artifact.outputs.linux }}
-      windows: ${{ steps.artifact.outputs.windows }}
-    # 平台矩阵：xcode-27 为 Apple Silicon（arm64），macos-26-intel 为 Intel（x86_64），
-    # ubuntu-26.04 为 Linux（x64，产出 deb），windows-2025 为 Win x64（产出 NSIS exe）。
-    # 每平台均构建 plain + bundled 双版本（见「构建双版本」步骤）。
     strategy:
       fail-fast: false
       matrix:
@@ -87,32 +143,21 @@ jobs:
           - platform: xcode-27
             key: macos_arm
             arch: aarch64
-          - platform: macos-26-intel
-            key: macos_intel
-            arch: x86_64
-          - platform: ubuntu-26.04
-            key: linux
-            arch: x86_64
-          - platform: windows-2025
-            key: windows
-            arch: x86_64
     runs-on: ${{ matrix.platform }}
     steps:
       - name: 检出源码
         uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-
-      # Linux 打包的系统依赖（Tauri v2 官方清单）：webkit2gtk-4.1 + GTK3 + tray + 图标渲染，
-      # 以及 xdg-utils（linuxdeploy/AppImage 及部分打包脚本需要）。仅 ubuntu 需要
-      # （Windows runner 预装 WebView2 与 MSVC 工具链，无需额外安装）。
-      # tray 使用 Ubuntu 提供的 libayatana-appindicator3-dev。
-      - name: 安装 Linux 系统依赖
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev xdg-utils
+          ref: ${{ env.RELEASE_SOURCE_SHA }}
+      - name: Check out the recovery packaging helper
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: recovery-tools
+          sparse-checkout: scripts/build-release.sh
+          sparse-checkout-cone-mode: false
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
@@ -199,32 +244,26 @@ jobs:
       # two 模式每轮构建后立即归档到 dist/release/{plain,bundled}，避免共用一个
       # target/release/bundle 输出目录而互相覆盖；bundled 首跑会自动下载 Node 并
       # npm ci 安装 dsh（scripts/bundle-runtime.mjs），产物命名加 -bundled 后缀区分。
-      # shell: bash —— build-release.sh 是 bash 脚本（Windows 走 Git Bash）。
-      #
-      # SENTRY_DSN：以环境变量注入，telemetry.rs 用 option_env! 在**编译期**读取。
-      # 未设置时编译出的二进制里遥测模块整体空转（不联网、不链接上报路径），
-      # 因此 fork 本仓库的人默认不会把数据发到作者的 Sentry 项目。
-      # 只有 push tag 的正式发布才注入（secrets 在 fork 的 PR 里不可用，
-      # 正好实现"仅官方发布版带遥测能力"）。
+      # 只替换打包脚本，使用固定 tag 源码及正式发布的遥测设置。
       - name: 构建双版本（plain + bundled）
         shell: bash
         env:
-          SENTRY_DSN: ${{ github.event_name == 'push' && github.ref_type == 'tag' && secrets.SENTRY_DSN || '' }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DSH_STAGE_MACOS_DMG: '1'
           # Tauri 仅在详细日志中输出 DMG 脚本的 stdout 和 stderr。
-          TAURI_BUILD_VERBOSE: ${{ runner.os == 'macOS' && matrix.arch == 'x86_64' && '1' || '0' }}
-        run: ./scripts/build-release.sh two
+          TAURI_BUILD_VERBOSE: '1'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          cp recovery-tools/scripts/build-release.sh scripts/build-release.sh
+          bash scripts/build-release.sh two
 
       - name: 整理安装包和 macOS ZIP
         shell: bash
         env:
           PLATFORM: ${{ matrix.key }}
           APP_VERSION: ${{ needs.prepare.outputs.app_version }}
-        run: |
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            python scripts/release-artifacts.py stage "$PLATFORM" "$APP_VERSION" release-files
-          else
-            python3 scripts/release-artifacts.py stage "$PLATFORM" "$APP_VERSION" release-files
-          fi
+        run: python3 scripts/release-artifacts.py stage "$PLATFORM" "$APP_VERSION" release-files
 
       - name: 上传安装包
         id: upload
@@ -251,26 +290,34 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
-      artifact_ids: ${{ steps.ids.outputs.all }}
+      official_artifact_ids: ${{ steps.ids.outputs.official }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.RELEASE_SOURCE_SHA }}
       - name: 检查产物 ID
         id: ids
         shell: bash
         env:
           MAC_ARM: ${{ needs.build.outputs.macos_arm }}
-          MAC_INTEL: ${{ needs.build.outputs.macos_intel }}
-          LINUX: ${{ needs.build.outputs.linux }}
-          WINDOWS: ${{ needs.build.outputs.windows }}
+          MAC_INTEL: ${{ needs.prepare.outputs.macos_intel }}
+          LINUX: ${{ needs.prepare.outputs.linux }}
+          WINDOWS: ${{ needs.prepare.outputs.windows }}
         run: |
           ids="$MAC_ARM,$MAC_INTEL,$LINUX,$WINDOWS"
           [[ "$ids" =~ ^[0-9]+,[0-9]+,[0-9]+,[0-9]+$ ]]
-          printf 'all=%s\n' "$ids" >> "$GITHUB_OUTPUT"
+          printf 'official=%s\n' "$MAC_INTEL,$LINUX,$WINDOWS" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ steps.ids.outputs.all }}
+          artifact-ids: ${{ needs.build.outputs.macos_arm }}
+          path: release-files
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.OFFICIAL_RUN_ID }}
+          artifact-ids: ${{ steps.ids.outputs.official }}
           path: release-files
           merge-multiple: true
           digest-mismatch: error
@@ -319,9 +366,12 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.RELEASE_SOURCE_SHA }}
       - uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs[matrix.platform] }}
+          github-token: ${{ github.token }}
+          run-id: ${{ matrix.platform == 'macos_arm' && github.run_id || env.OFFICIAL_RUN_ID }}
+          artifact-ids: ${{ matrix.platform == 'macos_arm' && needs.build.outputs.macos_arm || needs.prepare.outputs[matrix.platform] }}
           path: release-files
           digest-mismatch: error
       - uses: actions/setup-node@v7
@@ -348,7 +398,14 @@ jobs:
           if [[ "$VARIANT" == bundled ]]; then suffix="-bundled"; fi
           dmg="$PWD/release-files/DeepSeekHarness_${APP_VERSION}_${DMG_ARCH}${suffix}.dmg"
           zip="$PWD/release-files/DeepSeek-Harness${suffix}-${ARCH}-v${APP_VERSION}.zip"
-          bash scripts/smoke-macos-installer.sh "$dmg" "$APP_VERSION" "" "$VARIANT" "$zip"
+          bash scripts/smoke-macos-installer.sh "$dmg" "$APP_VERSION" "$PWD/screenshots/macos-$ARCH-$VARIANT.png" "$VARIANT" "$zip"
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() && runner.os == 'macOS' }}
+        with:
+          name: page-macos-${{ matrix.arch }}-${{ matrix.variant }}
+          path: screenshots/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Ubuntu 24.04 安装和冷启动
         if: runner.os == 'Linux'
         shell: bash
@@ -360,19 +417,28 @@ jobs:
 
   publish:
     name: 统一发布 GitHub Release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [prepare, integrity, smoke]
+    if: ${{ success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/release-v0.0.18-arm-recovery' }}
+    needs: [prepare, build, integrity, smoke]
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.RELEASE_SOURCE_SHA }}
       - uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.integrity.outputs.artifact_ids }}
+          artifact-ids: ${{ needs.build.outputs.macos_arm }}
+          path: release-files
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.OFFICIAL_RUN_ID }}
+          artifact-ids: ${{ needs.integrity.outputs.official_artifact_ids }}
           path: release-files
           merge-multiple: true
           digest-mismatch: error
@@ -381,7 +447,9 @@ jobs:
           APP_VERSION: ${{ needs.prepare.outputs.app_version }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
+          tag_object=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          test "$(gh api "repos/$GH_REPO/git/tags/$tag_object" --jq '.object.sha')" = "$RELEASE_SOURCE_SHA"
           python3 scripts/release-artifacts.py verify "$APP_VERSION" release-files
           bash scripts/publish-release.sh "$RELEASE_TAG" release-files
