@@ -45,6 +45,7 @@ func containsDshInterface(_ url: URL) throws -> Bool {
     // controls that another first-run dialog may cover.
     let workspace = [
         "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith", "addworkspace", "添加工作区",
+        "describewhatyouwanttobuild", "描述你想要构建的内容",
     ]
     let onboarding = ["addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置"]
     let preview = ["previewnotice", "预览须知", "预览说明", "预览提示", "预览公告"]
@@ -69,13 +70,15 @@ for _ in 0..<20 {
             capture.arguments = ["-x", "-o", "-a", "-T0", "-l\(id)", candidate.path]
             try capture.run()
             capture.waitUntilExit()
-            if capture.terminationStatus == 0, try containsDshInterface(candidate) {
+            if capture.terminationStatus == 0, files.fileExists(atPath: candidate.path) {
+                // Keep the last actual frame for diagnosis if OCR never succeeds.
+                if files.fileExists(atPath: output.path) { try files.removeItem(at: output) }
                 try files.moveItem(at: candidate, to: output)
-                exit(EXIT_SUCCESS)
+                if try containsDshInterface(output) { exit(EXIT_SUCCESS) }
+                lastError = "Window capture did not show the dsh interface"
+            } else {
+                lastError = "screencapture produced no PNG (exit \(capture.terminationStatus))"
             }
-            lastError = files.fileExists(atPath: candidate.path)
-                ? "Window capture did not show the dsh interface"
-                : "screencapture produced no PNG (exit \(capture.terminationStatus))"
         } catch {
             lastError = error.localizedDescription
         }

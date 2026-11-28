@@ -8,13 +8,13 @@ on:
         type: string
         default: '0.2.3-alpha.2'
       include_macos:
-        description: Also build and verify both Intel macOS packages
+        description: Also verify Apple Silicon and Intel Mac installers
         type: boolean
         default: false
       platforms:
         description: Platforms to verify
         type: choice
-        options: [windows-linux, windows, linux]
+        options: [windows-linux, windows, linux, macos]
         default: windows-linux
       source_run_id:
         description: Reuse immutable installers from this workflow run (empty builds current source)
@@ -45,16 +45,17 @@ jobs:
           source_run = os.environ["SOURCE_RUN_ID"]
           if source_run and not source_run.isdecimal():
               raise SystemExit("source_run_id must be a numeric workflow run ID")
-          packages = [
-              dict(runner="windows-2025", artifact="installers-windows-x64", extension="exe"),
-              dict(runner="ubuntu-26.04", artifact="installers-linux-x64", extension="deb"),
-          ]
-          if os.environ["PLATFORMS"] == "windows":
-              packages = [package for package in packages if package["runner"].startswith("windows")]
-          elif os.environ["PLATFORMS"] == "linux":
-              packages = [package for package in packages if package["runner"].startswith("ubuntu")]
-          if os.environ["INCLUDE_MACOS"] == "true":
-              packages.append(dict(runner="macos-26-intel", artifact="installers-macos-intel", extension="dmg"))
+          platforms = os.environ["PLATFORMS"]
+          packages = []
+          if platforms in ("windows-linux", "windows"):
+              packages.append(dict(runner="windows-2025", artifact="installers-windows-x64", extension="exe", arch="x86_64"))
+          if platforms in ("windows-linux", "linux"):
+              packages.append(dict(runner="ubuntu-26.04", artifact="installers-linux-x64", extension="deb", arch="x86_64"))
+          if platforms == "macos" or os.environ["INCLUDE_MACOS"] == "true":
+              packages.extend([
+                  dict(runner="xcode-27", artifact="installers-macos-arm64", extension="dmg", arch="arm64"),
+                  dict(runner="macos-26-intel", artifact="installers-macos-intel", extension="dmg", arch="x86_64"),
+              ])
           modes = ["default", "regression"] if os.environ["DSH_VERSION"] else ["default"]
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("packages=" + json.dumps(packages), file=output)
@@ -124,7 +125,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: src-tauri/resources/runtime
-          key: dsh-runtime-${{ matrix.runner }}-x86_64-${{ steps.versions.outputs.node }}-${{ steps.versions.outputs.dsh }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
+          key: dsh-runtime-${{ matrix.runner }}-${{ matrix.arch }}-${{ steps.versions.outputs.node }}-${{ steps.versions.outputs.dsh }}-${{ hashFiles('scripts/bundle-runtime.mjs') }}
       - name: Check source and build both installers
         shell: bash
         env:
@@ -165,7 +166,7 @@ jobs:
   windows:
     name: Windows x64 / ${{ matrix.variant }} / ${{ matrix.dsh_mode }}
     needs: [plan, package]
-    if: ${{ !cancelled() && inputs.platforms != 'linux' }}
+    if: ${{ !cancelled() && (inputs.platforms == 'windows-linux' || inputs.platforms == 'windows') }}
     runs-on: windows-2025
     timeout-minutes: 45
     strategy:
@@ -219,7 +220,7 @@ jobs:
   linux:
     name: Linux x64 / ${{ matrix.variant }} / ${{ matrix.dsh_mode }}
     needs: [plan, package]
-    if: ${{ !cancelled() && inputs.platforms != 'windows' }}
+    if: ${{ !cancelled() && (inputs.platforms == 'windows-linux' || inputs.platforms == 'linux') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -268,23 +269,28 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-  intel:
-    name: Intel macOS / ${{ matrix.variant }}
-    needs: package
-    if: ${{ !cancelled() && inputs.include_macos }}
-    runs-on: macos-26-intel
-    timeout-minutes: 25
+  macos:
+    name: macOS ${{ matrix.arch }} / ${{ matrix.variant }} / ${{ matrix.dsh_mode }}
+    needs: [plan, package]
+    if: ${{ !cancelled() && (inputs.platforms == 'macos' || inputs.include_macos) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
+        arch: [arm64, x86_64]
         variant: [plain, bundled]
+        dsh_mode: ${{ fromJSON(needs.plan.outputs.dsh_modes) }}
+        include:
+          - { arch: arm64, runner: macos-26, artifact: installers-macos-arm64 }
+          - { arch: x86_64, runner: macos-26-intel, artifact: installers-macos-intel }
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
-          name: installers-macos-intel
+          name: ${{ matrix.artifact }}
           github-token: ${{ github.token }}
           run-id: ${{ inputs.source_run_id || github.run_id }}
           path: installers
@@ -299,20 +305,24 @@ jobs:
           package-manager-cache: false
       - name: Verify real macOS page and capture the client window
         env:
+          ARCH: ${{ matrix.arch }}
           VARIANT: ${{ matrix.variant }}
+          DSH_MODE: ${{ matrix.dsh_mode }}
           APP_VERSION: ${{ steps.versions.outputs.app }}
           NODE_VERSION: ${{ steps.versions.outputs.node }}
           BUNDLED_DSH_VERSION: ${{ steps.versions.outputs.bundled_dsh }}
+          DSH_SMOKE_VERSION: ${{ matrix.dsh_mode == 'regression' && inputs.dsh_version || '' }}
         run: |
           set -euo pipefail
+          test "$(uname -m)" = "$ARCH"
           shopt -s nullglob
           dmgs=("$PWD/installers/$VARIANT/"*.dmg)
           test "${#dmgs[@]}" -eq 1
-          bash scripts/smoke-macos-installer.sh "${dmgs[0]}" "$APP_VERSION" "$GITHUB_WORKSPACE/screenshots/macos-intel-$VARIANT.png" "$VARIANT"
+          bash scripts/smoke-macos-installer.sh "${dmgs[0]}" "$APP_VERSION" "$GITHUB_WORKSPACE/screenshots/macos-$ARCH-$VARIANT-$DSH_MODE.png" "$VARIANT"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: page-macos-intel-${{ matrix.variant }}
+          name: page-macos-${{ matrix.arch }}-${{ matrix.variant }}-${{ matrix.dsh_mode }}
           path: screenshots/
           retention-days: 14
           if-no-files-found: warn

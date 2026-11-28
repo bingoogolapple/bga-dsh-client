@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Validate a native CI installer and exercise the app's default DSH startup path.
+# DSH_SMOKE_VERSION additionally exercises an explicitly selected DSH version.
 set -euo pipefail
 
 if [[ $# -lt 3 || $# -gt 5 ]]; then
@@ -31,7 +32,8 @@ sw_vers
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 app_config="$HOME/Library/Application Support/cn.bingoogolapple.dsh"
-if [[ -e "$app_config" || -e "$HOME/.dsh/bga-dsh-client" ]]; then
+settings_dir="$HOME/.dsh/bga-dsh-client"
+if [[ -e "$app_config" || -e "$settings_dir" ]]; then
   echo "Smoke test requires a fresh app configuration and empty app npm cache" >&2
   exit 2
 fi
@@ -41,6 +43,9 @@ mount_dir="$scratch/volume"
 mounted=0
 cleanup() {
   local status=$?
+  if [[ -f "$scratch/owns-settings" ]]; then
+    rm -rf -- "$settings_dir"
+  fi
   if [[ "$mounted" == 1 ]]; then
     if ! hdiutil detach "$mount_dir" && ! hdiutil detach -force "$mount_dir"; then
       echo "Unable to detach the test image: $mount_dir" >&2
@@ -238,7 +243,57 @@ env.update(
     npm_config_cache=str(scratch / "empty-external-npm-cache"),
 )
 
-print(f"Launching the installed {arch} {variant} app with no configuration or npm cache", flush=True)
+selected_version = os.environ.get("DSH_SMOKE_VERSION", "")
+selected_entry = None
+selected_node = None
+if selected_version:
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise SystemExit("Selected DSH smoke requires a fresh GitHub Actions runner")
+    if (not re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?", selected_version)
+            or ".." in selected_version):
+        raise SystemExit("DSH_SMOKE_VERSION must be a concrete package version")
+    settings_dir = Path.home() / ".dsh/bga-dsh-client"
+    if settings_dir.exists() or app_config.exists():
+        raise SystemExit("Selected DSH smoke requires a fresh client profile")
+    system_node = shutil.which("node")
+    system_npm = shutil.which("npm")
+    if variant == "plain" and (not system_node or not system_npm):
+        raise SystemExit("Selected plain DSH smoke requires system Node and npm")
+    selected_node = node if variant == "bundled" else Path(system_node).resolve()
+    npm_command = ([str(node), str(runtime / "nd/lib/node_modules/npm/bin/npm-cli.js")]
+                   if variant == "bundled" else [system_npm])
+    # The shell's EXIT trap removes only this exclusively created test profile,
+    # including when npm preparation fails before the app-launch try/finally.
+    settings_dir.mkdir(parents=True, exist_ok=False)
+    (scratch / "owns-settings").touch()
+    version_dir = settings_dir / "dsh-versions" / selected_version
+    version_dir.mkdir(parents=True)
+    subprocess.run(
+        [*npm_command, "install", "--prefix", str(version_dir), "--save-exact",
+         "--no-audit", "--no-fund", "--registry", "https://registry.npmjs.org",
+         f"@deepseek-ai/dsh@{selected_version}"],
+        cwd=scratch, env=env, check=True, timeout=600,
+    )
+    selected_entry = version_dir / "node_modules/@deepseek-ai/dsh/lib/bin.js"
+    if not selected_entry.is_file():
+        raise SystemExit("Selected DSH entry point is missing")
+    installed_version = json.loads((selected_entry.parents[1] / "package.json").read_text())["version"]
+    reported_version = subprocess.check_output(
+        [selected_node, selected_entry, "--version"], cwd=scratch, env=env,
+        text=True, timeout=30,
+    ).strip()
+    if installed_version != selected_version or reported_version != selected_version:
+        raise SystemExit("Selected DSH package and CLI version do not match")
+    (settings_dir / "settings.json").write_text(json.dumps({
+        "dsh_version": selected_version, "stop_service_on_quit": True,
+        "telemetry_enabled": False,
+    }))
+    launch_node = str(node) if variant == "bundled" else "node"
+    expected_command = f'exec "{launch_node}" "{selected_entry}" web --no-open'
+    print(f"Prepared selected dsh {selected_version} for the {arch} {variant} installer", flush=True)
+
+startup_mode = f"selected dsh {selected_version}" if selected_version else "no configuration or npm cache"
+print(f"Launching the installed {arch} {variant} app with {startup_mode}", flush=True)
 started = time.monotonic()
 with app_log.open("wb") as output:
     proc = subprocess.Popen([exe], cwd=scratch, env=env, stdout=output, stderr=subprocess.STDOUT,
@@ -271,8 +326,25 @@ with app_log.open("wb") as output:
         listeners = subprocess.check_output(
             ["lsof", "-nP", "-iTCP:3080", "-sTCP:LISTEN", "-t"], text=True
         ).splitlines()
-        if not any(os.getpgid(int(pid)) == service_pid for pid in listeners):
+        own_listeners = [pid for pid in listeners if os.getpgid(int(pid)) == service_pid]
+        if not own_listeners:
             raise RuntimeError("The dsh listener does not belong to the app's service process group")
+        if selected_version:
+            matched_listener = False
+            for pid in own_listeners:
+                executable_files = subprocess.check_output(
+                    ["lsof", "-a", "-p", pid, "-d", "txt", "-Fn"], text=True,
+                ).splitlines()
+                matching_node = any(
+                    line.startswith("n") and Path(line[1:]).resolve() == selected_node.resolve()
+                    for line in executable_files
+                )
+                command = subprocess.check_output(["ps", "-ww", "-p", pid, "-o", "args="], text=True)
+                if matching_node and str(selected_entry) in command:
+                    matched_listener = True
+                    break
+            if not matched_listener:
+                raise RuntimeError("The selected DSH listener did not use the expected Node and entry point")
 
         cookies = http.cookiejar.CookieJar()
         client = urllib.request.build_opener(
@@ -298,7 +370,11 @@ with app_log.open("wb") as output:
         if proc.poll() is not None:
             raise RuntimeError("App exited while checking the DSH service")
         npx_cache = app_config / "npm-cache/_npx"
-        if variant == "plain":
+        if selected_version:
+            dsh_version = json.loads((selected_entry.parents[1] / "package.json").read_text())["version"]
+            if dsh_version != selected_version or npx_cache.exists():
+                raise RuntimeError("Selected DSH startup used the wrong package or unexpectedly populated the npx cache")
+        elif variant == "plain":
             packages = list(npx_cache.glob("*/node_modules/@deepseek-ai/dsh/package.json"))
             if len(packages) != 1:
                 raise RuntimeError("Expected one dsh package in the newly populated app npm cache")
