@@ -77,9 +77,6 @@ export DSH_HOME="$probe_dir/dsh"
 export DSH_AGENTS_HOME="$probe_dir/agents"
 export npm_config_cache="$probe_dir/empty-external-npm-cache"
 export DO_NOT_TRACK=1 LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=0 GDK_SCALE=1 GDK_DPI_SCALE=1
-# Xvfb has no hardware compositor. Keep WebKitGTK's software image transport
-# explicit; this affects rendering only, never DSH or WebView security checks.
-export WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 WEBKIT_DISABLE_COMPOSITING_MODE=1
 app_dir="$XDG_CONFIG_HOME/cn.bingoogolapple.dsh"
 cd "$probe_dir"
 

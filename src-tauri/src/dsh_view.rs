@@ -76,6 +76,12 @@ fn layout_shell(app: &AppHandle, content_visible: bool) -> Result<(), String> {
                     .and_then(|parent| parent.downcast::<gtk::Box>().ok())
                     .ok_or_else(|| "Main WebView is not in its GTK container".to_string())
                     .map(|container| {
+                        // GtkBox combines its packing flag with the widget's
+                        // computed expansion. WebKit requests vexpand itself,
+                        // so packing=false alone still consumes the full window
+                        // and leaves the DSH child one pixel below the bottom.
+                        shell.set_hexpand(true);
+                        shell.set_vexpand(!content_visible);
                         container.set_child_packing(
                             &shell,
                             !content_visible,

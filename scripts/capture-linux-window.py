@@ -83,9 +83,29 @@ def wait_for_interface(pid, window, output):
         os.kill(pid, 0)
         kind = capture_interface(window, output)
         if kind is not None:
-            return kind
+            try:
+                bounds = geometry(window)
+                for document in document_diagnostics(pid)["documents"]:
+                    if matches_content_bounds(document, bounds):
+                        return kind, document["bounds"]
+            except GLib.Error:
+                # Painting can finish before the AT-SPI document is available.
+                pass
         time.sleep(2)
-    raise RuntimeError("The actual client window did not show DSH content (blank/authentication error)")
+    raise RuntimeError("The actual client window did not show DSH content with a correctly sized native document")
+
+
+def matches_content_bounds(document, window):
+    if (document.get("title") != "DeepSeek Harness"
+            or not document.get("visible") or not document.get("showing")):
+        return False
+    bounds = document.get("bounds", {})
+    expected = {"x": window["x"], "y": window["y"] + 40,
+                "width": window["width"], "height": window["height"] - 40}
+    # Xvfb/GTK scale is fixed to one. Allow only small native border/rounding
+    # differences, never a zero-height child packed below the visible window.
+    return all(name in bounds and abs(bounds[name] - value) <= 4
+               for name, value in expected.items())
 
 
 def is_toolbar_control(node, bounds):
@@ -206,11 +226,11 @@ def main():
     subprocess.run(["wmctrl", "-ir", args.window, "-e", "0,0,0,1600,1000"], check=True)
     subprocess.run(["wmctrl", "-ia", args.window], check=True)
     try:
-        before = wait_for_interface(args.pid, args.window, args.screenshot)
+        before, before_bounds = wait_for_interface(args.pid, args.window, args.screenshot)
         refresh_client(args.pid, args.window)
         # Give the real toolbar navigation time to replace the previous document.
         time.sleep(2)
-        after = wait_for_interface(args.pid, args.window, args.screenshot)
+        after, after_bounds = wait_for_interface(args.pid, args.window, args.screenshot)
     except Exception:
         try:
             diagnostics = document_diagnostics(args.pid)
@@ -221,8 +241,13 @@ def main():
         debug_path.write_text(json.dumps(diagnostics, indent=2) + "\n")
         print("Linux page diagnostics: " + json.dumps(diagnostics), file=sys.stderr, flush=True)
         raise
-    print(json.dumps({"rendered_dsh_before_refresh": before, "rendered_dsh_after_refresh": after,
-                      "toolbar_refresh": "AT-SPI action passed", "screenshot": str(args.screenshot)}), flush=True)
+    evidence = {"result": "passed", "actual_dsh_document": True,
+                "rendered_dsh_before_refresh": before, "rendered_dsh_after_refresh": after,
+                "dsh_document_bounds_before_refresh": before_bounds,
+                "dsh_document_bounds_after_refresh": after_bounds,
+                "toolbar_refresh": "AT-SPI action passed", "screenshot": str(args.screenshot)}
+    args.screenshot.with_suffix(".page.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    print(json.dumps(evidence), flush=True)
 
 
 if __name__ == "__main__":
