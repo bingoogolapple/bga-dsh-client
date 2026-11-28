@@ -24,15 +24,22 @@ from gi.repository import Atspi, GLib  # noqa: E402
 
 def interface_kind(text):
     labels = "".join(character for character in text.lower() if character.isalnum())
+    # A dialog can leave background workspace controls readable to OCR/AT-SPI.
+    # Give known overlays precedence over those controls as a second check.
+    if (any(word in labels for word in ("getstarted", "开始使用"))
+            and any(word in labels for word in ("addapikey", "addanapikey", "添加apikey"))
+            and any(word in labels for word in ("signin", "登录"))):
+        return "optional-account"
     groups = {
-        "workspace": (
-            "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith",
-            "addworkspace", "添加工作区",
-        ),
         "onboarding": (
             "addanapikeytogetstarted", "添加一个apikey开始使用", "configurelater", "稍后配置",
         ),
         "preview": ("previewnotice", "预览须知", "预览说明", "预览提示", "预览公告"),
+        "workspace": (
+            "newsession", "newchat", "新会话", "新建会话", "whatcanihelpyouwith",
+            "addworkspace", "添加工作区",
+            "describewhatyouwanttobuild", "描述你想要构建的内容",
+        ),
     }
     for kind, words in groups.items():
         if any(word in labels for word in words):
@@ -77,22 +84,34 @@ def capture_interface(window, output):
     return interface_kind(text)
 
 
-def wait_for_interface(pid, window, output):
+def wait_for_interface(pid, window, output, dismissed_dialogs):
     deadline = time.monotonic() + 60
+    unobstructed_since = None
     while time.monotonic() < deadline:
         os.kill(pid, 0)
         kind = capture_interface(window, output)
-        if kind is not None:
-            try:
-                bounds = geometry(window)
-                for document in document_diagnostics(pid)["documents"]:
-                    if matches_content_bounds(document, bounds):
-                        return kind, document["bounds"]
-            except GLib.Error:
-                # Painting can finish before the AT-SPI document is available.
-                pass
-        time.sleep(2)
-    raise RuntimeError("The actual client window did not show DSH content with a correctly sized native document")
+        try:
+            page = dsh_page_snapshot(pid, geometry(window))
+            if page is not None:
+                clear, dismissed = dismiss_optional_dialog(page["dialogs"])
+                if dismissed is not None:
+                    dismissed_dialogs.append(dismissed)
+                if clear and kind == "workspace":
+                    if unobstructed_since is None:
+                        unobstructed_since = time.monotonic()
+                    # First-run account state may arrive after the composer.
+                    # Do not pass through a newly arriving modal overlay.
+                    if time.monotonic() - unobstructed_since >= 2:
+                        return kind, page["document"]["bounds"]
+                else:
+                    unobstructed_since = None
+            else:
+                unobstructed_since = None
+        except GLib.Error:
+            # Painting can finish before the AT-SPI document is available.
+            unobstructed_since = None
+        time.sleep(0.5)
+    raise RuntimeError("The actual client window did not show an unobstructed DSH workspace with a correctly sized native document")
 
 
 def matches_content_bounds(document, window):
@@ -169,6 +188,103 @@ def document_diagnostics(pid):
     return {"documents": documents, "accessible_nodes_visited": visited}
 
 
+def document_nodes(root):
+    queue = deque([root])
+    visited = 0
+    deadline = time.monotonic() + 8
+    while queue and visited < 2000 and time.monotonic() < deadline:
+        node = queue.popleft()
+        visited += 1
+        yield node
+        try:
+            for index in range(node.get_child_count()):
+                child = node.get_child_at_index(index)
+                if child is not None:
+                    queue.append(child)
+        except GLib.Error:
+            continue
+
+
+def dsh_page_snapshot(pid, bounds):
+    """Inspect only the correctly positioned remote DSH document, not its shell."""
+    Atspi.init()
+    if hasattr(Atspi, "set_timeout"):
+        Atspi.set_timeout(500, 1000)
+    context = GLib.MainContext.default()
+    while context.pending():
+        context.iteration(False)
+    desktop = Atspi.get_desktop(0)
+    roles = {getattr(Atspi.Role, name, None) for name in ("DOCUMENT_WEB", "DOCUMENT_FRAME")}
+    for index in range(desktop.get_child_count()):
+        app = desktop.get_child_at_index(index)
+        if app is None or app.get_process_id() != pid:
+            continue
+        for node in document_nodes(app):
+            try:
+                if node.get_role() not in roles or node.get_name() != "DeepSeek Harness":
+                    continue
+                states = node.get_state_set()
+                component = node.get_component_iface()
+                if component is None:
+                    continue
+                rect = component.get_extents(Atspi.CoordType.SCREEN)
+                document = {
+                    "title": "DeepSeek Harness",
+                    "visible": states.contains(Atspi.StateType.VISIBLE),
+                    "showing": states.contains(Atspi.StateType.SHOWING),
+                    "bounds": {name: getattr(rect, name) for name in ("x", "y", "width", "height")},
+                }
+                if not matches_content_bounds(document, bounds):
+                    continue
+                dialogs = []
+                for descendant in document_nodes(node):
+                    role = descendant.get_role()
+                    state = descendant.get_state_set()
+                    if (role == Atspi.Role.DIALOG or state.contains(Atspi.StateType.MODAL)) \
+                            and state.contains(Atspi.StateType.SHOWING):
+                        dialogs.append(list(document_nodes(descendant)))
+                return {"document": document, "dialogs": dialogs}
+            except GLib.Error:
+                continue
+    return None
+
+
+def optional_dialog_choice(names):
+    labels = {"".join(character for character in name.lower() if character.isalnum()) for name in names}
+    if (labels.intersection(("getstarted", "开始使用"))
+            and labels.intersection(("addapikey", "添加apikey"))
+            and labels.intersection(("signin", "登录"))):
+        return "optional-account", ("close", "关闭")
+    if labels.intersection(("previewnotice", "预览版说明", "预览须知", "预览说明", "预览提示", "预览公告")):
+        return "preview", ("continue", "继续")
+    if labels.intersection(("addanapikeytogetstarted", "添加一个apikey开始使用")):
+        return "optional-api-key", ("configurelater", "稍后配置")
+    return None
+
+
+def dismiss_optional_dialog(dialogs):
+    if not dialogs:
+        return True, None
+    # Portaled/nested dialogs are appended after their background document.
+    # An unknown visible modal blocks success; never invoke background controls.
+    nodes = dialogs[-1]
+    names = [node.get_name() or "" for node in nodes]
+    choice = optional_dialog_choice(names)
+    if choice is None:
+        return False, None
+    kind, safe_buttons = choice
+    for node in nodes:
+        state = node.get_state_set()
+        name = "".join(character for character in (node.get_name() or "").lower() if character.isalnum())
+        if (node.get_role() == Atspi.Role.PUSH_BUTTON and name in safe_buttons
+                and state.contains(Atspi.StateType.SHOWING)
+                and (state.contains(Atspi.StateType.ENABLED) or state.contains(Atspi.StateType.SENSITIVE))):
+            action = node.get_action_iface()
+            if action is not None and action.get_n_actions() > 0 and action.do_action(0):
+                return False, kind
+    return False, None
+
+
 def refresh_client(pid, window):
     Atspi.init()
     if hasattr(Atspi, "set_timeout"):
@@ -212,6 +328,36 @@ def refresh_client(pid, window):
     raise RuntimeError("Could not invoke the real client Refresh button through AT-SPI")
 
 
+def resize_content_edges(window):
+    """Drag the actual child WebView's right and bottom edges, without WM shortcuts."""
+    evidence = []
+    for edge in ("right", "bottom"):
+        before = geometry(window)
+        if edge == "right":
+            start = (before["x"] + before["width"] - 2, before["y"] + before["height"] // 2)
+            end = (start[0] - 80, start[1])
+            expected = {**before, "width": before["width"] - 80}
+        else:
+            start = (before["x"] + before["width"] // 2, before["y"] + before["height"] - 2)
+            end = (start[0], start[1] - 60)
+            expected = {**before, "height": before["height"] - 60}
+        subprocess.run([
+            "xdotool", "mousemove", "--sync", *(str(value) for value in start),
+            "mousedown", "1", "sleep", "0.15", "mousemove", "--sync",
+            *(str(value) for value in end), "sleep", "0.3", "mouseup", "1",
+        ], check=True, timeout=10)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            after = geometry(window)
+            if all(abs(after[name] - expected[name]) <= 4 for name in expected):
+                evidence.append({"edge": edge, "before": before, "after": after})
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("Dragging the actual DSH content's " + edge + " edge did not resize the window")
+    return evidence
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pid", type=int)
@@ -226,11 +372,14 @@ def main():
     subprocess.run(["wmctrl", "-ir", args.window, "-e", "0,0,0,1600,1000"], check=True)
     subprocess.run(["wmctrl", "-ia", args.window], check=True)
     try:
-        before, before_bounds = wait_for_interface(args.pid, args.window, args.screenshot)
+        dialogs_before = []
+        dialogs_after = []
+        before, before_bounds = wait_for_interface(args.pid, args.window, args.screenshot, dialogs_before)
+        resize_evidence = resize_content_edges(args.window)
         refresh_client(args.pid, args.window)
         # Give the real toolbar navigation time to replace the previous document.
         time.sleep(2)
-        after, after_bounds = wait_for_interface(args.pid, args.window, args.screenshot)
+        after, after_bounds = wait_for_interface(args.pid, args.window, args.screenshot, dialogs_after)
     except Exception:
         try:
             diagnostics = document_diagnostics(args.pid)
@@ -245,6 +394,11 @@ def main():
                 "rendered_dsh_before_refresh": before, "rendered_dsh_after_refresh": after,
                 "dsh_document_bounds_before_refresh": before_bounds,
                 "dsh_document_bounds_after_refresh": after_bounds,
+                "unobstructed_workspace_before_refresh": True,
+                "unobstructed_workspace_after_refresh": True,
+                "optional_dialogs_dismissed_before_refresh": dialogs_before,
+                "optional_dialogs_dismissed_after_refresh": dialogs_after,
+                "content_edge_resize": resize_evidence,
                 "toolbar_refresh": "AT-SPI action passed", "screenshot": str(args.screenshot)}
     args.screenshot.with_suffix(".page.json").write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps(evidence), flush=True)

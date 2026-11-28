@@ -464,6 +464,9 @@ try {
         -WindowHandle ($app.MainWindowHandle.ToInt64()) -EvidencePath $pageEvidence
     if ($LASTEXITCODE -ne 0) { throw 'The actual installed DSH WebView page or interaction failed verification' }
     Save-ClientScreenshot -App $app -Path $ScreenshotPath
+    & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'assert-windows-page.ps1') `
+        -WindowHandle ($app.MainWindowHandle.ToInt64()) -EvidencePath $pageEvidence -WorkspaceOnly
+    if ($LASTEXITCODE -ne 0) { throw 'The final screenshot did not show the verified unobstructed DSH workspace' }
     Write-Host "PASS: $AppVersion $Variant rendered its actual DSH workspace and plugin page, survived refresh, and dsh $dshVersion returned authenticated HTTP 200 after $seconds seconds"
 } catch {
     if ($Variant -eq 'plain') {

@@ -28,7 +28,7 @@ if [[ "${1:-}" != --in-display ]]; then
 
   sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
   sudo apt-get -o Acquire::Retries=3 install -y "$deb" xvfb xauth dbus-x11 x11-utils openbox wmctrl \
-    scrot tesseract-ocr tesseract-ocr-chi-sim python3-pil python3-gi gir1.2-atspi-2.0 \
+    scrot xdotool tesseract-ocr tesseract-ocr-chi-sim python3-pil python3-gi gir1.2-atspi-2.0 \
     at-spi2-core gsettings-desktop-schemas fonts-noto-cjk
   dpkg-query -W -f='${Status} ${Version}\n' "$package" | grep -Fx "install ok installed $app_version"
   probe_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/dsh-linux.XXXXXXXX")"
@@ -76,7 +76,7 @@ export XDG_DATA_HOME="$probe_dir/data"
 export DSH_HOME="$probe_dir/dsh"
 export DSH_AGENTS_HOME="$probe_dir/agents"
 export npm_config_cache="$probe_dir/empty-external-npm-cache"
-export DO_NOT_TRACK=1 LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=0 GDK_SCALE=1 GDK_DPI_SCALE=1
+export DO_NOT_TRACK=1 LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=0 GDK_SCALE=1 GDK_DPI_SCALE=1 DSH_WEBVIEW_LAYOUT_DEBUG=1
 app_dir="$XDG_CONFIG_HOME/cn.bingoogolapple.dsh"
 cd "$probe_dir"
 

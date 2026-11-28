@@ -3,7 +3,9 @@
     [long]$WindowHandle,
 
     [Parameter(Mandatory)]
-    [string]$EvidencePath
+    [string]$EvidencePath,
+
+    [switch]$WorkspaceOnly
 )
 
 # Run with Windows PowerShell 5.1, whose .NET Framework includes UIAutomation.
@@ -14,6 +16,53 @@ Add-Type -AssemblyName UIAutomationTypes
 
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
 if (!$root) { throw 'The installed client has no automation window' }
+$script:accountPromptDismissals = 0
+
+function Get-VisiblePageNodes($Container) {
+    foreach ($element in $Container.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)) {
+        try {
+            $current = $element.Current
+            if (!$current.IsOffscreen) {
+                [PSCustomObject]@{
+                    Element = $element
+                    Name = $current.Name
+                    ControlType = $current.ControlType
+                    Enabled = $current.IsEnabled
+                    Width = $current.BoundingRectangle.Width
+                    Height = $current.BoundingRectangle.Height
+                    # .NET Framework UIAutomation does not expose the newer
+                    # native AriaRole property identifier. Use its supported
+                    # control type/localized role description instead.
+                    IsDialog = ($current.ControlType -eq [System.Windows.Automation.ControlType]::Window -or
+                        $current.LocalizedControlType -match '(?i)(dialog|对话)')
+                }
+            }
+        } catch [System.Windows.Automation.ElementNotAvailableException] {
+            # SPA navigation can replace elements during enumeration.
+        }
+    }
+}
+
+function Find-AccountDialogNodes($Document, $Nodes) {
+    $documentId = [string]::Join(':', $Document.GetRuntimeId())
+    foreach ($title in @($Nodes | Where-Object { $_.Name -match '^(Get started|开始使用)$' })) {
+        $container = $title.Element
+        for ($depth = 0; $depth -lt 12 -and $container; $depth++) {
+            if ([string]::Join(':', $container.GetRuntimeId()) -eq $documentId) { break }
+            $dialogNodes = @(Get-VisiblePageNodes $container)
+            $dialogNames = @($dialogNodes | ForEach-Object { $_.Name })
+            # Scope Close to the optional account dialog, never an unrelated
+            # workspace/sidebar close action or an account sign-in control.
+            if (($dialogNames -match '^(Add API Key|添加 API Key)$') -and
+                ($dialogNames -match '^(Sign in|登录)$') -and
+                ($dialogNames -match '^(Close|关闭)$')) {
+                return $dialogNodes
+            }
+            $container = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($container)
+        }
+    }
+}
 
 function Read-DshPage {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -24,25 +73,7 @@ function Read-DshPage {
         # The trusted shell is titled DeepSeekHarness (without the space).
         # Only inspect the actual DSH document, not toolbar/log/splash text.
         if ($document.Current.Name -notmatch '(?i)^DeepSeek\s+Harness(?:\b|$)') { continue }
-        $nodes = @()
-        foreach ($element in $document.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.Condition]::TrueCondition)) {
-            try {
-                $current = $element.Current
-                if (!$current.IsOffscreen -and $current.Name) {
-                    $nodes += [PSCustomObject]@{
-                        Element = $element
-                        Name = $current.Name
-                        ControlType = $current.ControlType
-                        Enabled = $current.IsEnabled
-                        Width = $current.BoundingRectangle.Width
-                        Height = $current.BoundingRectangle.Height
-                    }
-                }
-            } catch [System.Windows.Automation.ElementNotAvailableException] {
-                # SPA navigation can replace elements during enumeration.
-            }
-        }
+        $nodes = @(Get-VisiblePageNodes $document)
         $names = @($nodes | ForEach-Object { $_.Name })
         # The navigation sidebar is also present on plugin/settings pages.
         # Require the actual task composer, not just a sidebar search box.
@@ -52,10 +83,20 @@ function Read-DshPage {
              ($_.Width -ge 200 -and $_.Height -ge 60))
         }
         $kind = 'loading'
-        if ($names -match '^(Add an API key to get started|添加一个 API Key 开始使用)$') {
+        $accountDialogNodes = @()
+        if (($names -match '^(Get started|开始使用)$') -and
+            ($names -match '^(Add API Key|添加 API Key)$') -and
+            ($names -match '^(Sign in|登录)$')) {
+            $kind = 'account-prompt'
+            $accountDialogNodes = @(Find-AccountDialogNodes $document $nodes)
+        } elseif ($names -match '^(Add an API key to get started|添加一个 API Key 开始使用)$') {
             $kind = 'onboarding'
         } elseif ($names -match '^(Preview Notice|预览版说明|预览须知|预览说明)$') {
             $kind = 'preview'
+        } elseif ($nodes | Where-Object { $_.IsDialog }) {
+            # IsOffscreen does not detect modal occlusion. Do not count the
+            # visible-to-UIA sidebar/editor underneath an unhandled dialog.
+            $kind = 'blocked-dialog'
         } elseif (($names -match '^(Plugins|插件)$') -and
             ($names -match '(?i)(built.?in plug|installed plug|内置插件|已安装插件)')) {
             $kind = 'plugins'
@@ -63,7 +104,12 @@ function Read-DshPage {
             $composer) {
             $kind = 'workspace'
         }
-        return [PSCustomObject]@{ Document = $document; Nodes = $nodes; Kind = $kind }
+        return [PSCustomObject]@{
+            Document = $document
+            Nodes = $nodes
+            Kind = $kind
+            AccountDialogNodes = $accountDialogNodes
+        }
     }
     return $null
 }
@@ -84,12 +130,42 @@ function Invoke-PageControl($Nodes, [string]$NamePattern) {
     return $false
 }
 
+function Dismiss-OptionalAccountPrompt($Page) {
+    if (!$Page -or $Page.Kind -ne 'account-prompt') { return $Page }
+    if (!(Invoke-PageControl $Page.AccountDialogNodes '^(Close|关闭)$')) {
+        throw 'Could not identify the optional account dialog Close control'
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 200
+        try {
+            $currentPage = Read-DshPage
+        } catch [System.Windows.Automation.ElementNotAvailableException] {
+            continue
+        }
+        if ($currentPage -and $currentPage.Kind -ne 'account-prompt') {
+            $script:accountPromptDismissals++
+            Write-Host 'UIA: Closed the optional Get started account prompt without signing in'
+            return $currentPage
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'The optional account dialog remained visible after Close'
+}
+
 function Wait-DshWorkspace([int]$Seconds) {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $workspaceSince = $null
     do {
         try {
-            $page = Read-DshPage
-            if ($page -and $page.Kind -eq 'workspace') { return $page }
+            $page = Dismiss-OptionalAccountPrompt (Read-DshPage)
+            if ($page -and $page.Kind -eq 'workspace') {
+                # Give asynchronous first-run overlays time to appear. A
+                # workspace hidden under a dialog is never a successful read.
+                if (!$workspaceSince) { $workspaceSince = [DateTime]::UtcNow }
+                if (([DateTime]::UtcNow - $workspaceSince).TotalSeconds -ge 2) { return $page }
+            } else {
+                $workspaceSince = $null
+            }
             if ($page -and $page.Kind -eq 'preview') {
                 # This is a disposable first-run profile and a non-binding
                 # product preview notice, not a user account or terms flow.
@@ -106,6 +182,25 @@ function Wait-DshWorkspace([int]$Seconds) {
     throw 'The actual DSH WebView did not render its workspace controls (blank or authentication error pages cannot pass)'
 }
 
+if ($WorkspaceOnly) {
+    # This final check follows the composed-window screenshot. It is strictly
+    # read-only: do not close a dialog after it was captured and then call the
+    # screenshot a successful workspace image.
+    $evidence = Get-Content -LiteralPath $EvidencePath -Raw | ConvertFrom-Json
+    if ($evidence.result -notin @('pending_capture', 'passed')) {
+        throw 'The final screenshot is missing a successful DSH interaction sequence'
+    }
+    $capturedPage = Read-DshPage
+    $capturedWorkspace = $capturedPage -and $capturedPage.Kind -eq 'workspace'
+    $evidence | Add-Member -NotePropertyName captured_workspace_unblocked -NotePropertyValue ([bool]$capturedWorkspace) -Force
+    $evidence.result = if ($capturedWorkspace) { 'passed' } else { 'failed' }
+    $evidence.checked_at_utc = [DateTime]::UtcNow.ToString('o')
+    [IO.File]::WriteAllText($EvidencePath, ($evidence | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    if (!$capturedWorkspace) { throw 'The captured client window was not an unobstructed DSH workspace' }
+    Write-Host 'PASS: The final screenshot corresponds to an unobstructed DSH workspace'
+    exit 0
+}
+
 $workspacePage = Wait-DshWorkspace 90
 Write-Host 'UIA: Actual DSH workspace and task composer are visible'
 if (!(Invoke-PageControl $workspacePage.Nodes '^(Plugins|插件)$')) {
@@ -114,8 +209,13 @@ if (!(Invoke-PageControl $workspacePage.Nodes '^(Plugins|插件)$')) {
 $pluginDeadline = [DateTime]::UtcNow.AddSeconds(30)
 $plugins = $null
 do {
-    try { $plugins = Read-DshPage } catch [System.Windows.Automation.ElementNotAvailableException] {}
+    try { $plugins = Dismiss-OptionalAccountPrompt (Read-DshPage) } catch [System.Windows.Automation.ElementNotAvailableException] {}
     if ($plugins -and $plugins.Kind -eq 'plugins') { break }
+    if ($plugins -and $plugins.Kind -eq 'workspace') {
+        # A late first-run prompt can complete by returning to the workspace.
+        # Reopen the requested read-only panel only after that prompt is gone.
+        $null = Invoke-PageControl $plugins.Nodes '^(Plugins|插件)$'
+    }
     Start-Sleep -Milliseconds 500
 } while ([DateTime]::UtcNow -lt $pluginDeadline)
 if (!$plugins -or $plugins.Kind -ne 'plugins') {
@@ -149,13 +249,16 @@ $null = Wait-DshWorkspace 60
 Write-Host 'UIA: DSH workspace restored after the local toolbar refresh'
 
 $evidence = [ordered]@{
-    result = 'passed'
+    result = 'pending_capture'
     actual_dsh_document = $true
     workspace_controls = $true
     plugin_navigation = $true
     plugin_configuration_rendered = $true
     toolbar_refresh = $true
     workspace_after_refresh = $true
+    workspace_unblocked_by_dialog = $true
+    captured_workspace_unblocked = $false
+    optional_account_prompts_closed = $script:accountPromptDismissals
     checked_at_utc = [DateTime]::UtcNow.ToString('o')
 }
 $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($EvidencePath))
